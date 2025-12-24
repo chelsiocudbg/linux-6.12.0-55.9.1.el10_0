@@ -523,26 +523,6 @@ int cxgb4_uld_server_create(const struct net_device *dev, unsigned int stid,
 }
 EXPORT_SYMBOL(cxgb4_uld_server_create);
 
-/**
- *      cxgb4_create_server - create an IP server
- *      @dev: the device
- *      @stid: the server TID
- *      @sip: local IP address to bind server to
- *      @sport: the server's TCP port
- *      @vlan: the VLAN header information
- *      @queue: queue to direct messages from this server to
- *
- *      Create an IP server for the given port and address.
- *      Returns <0 on error and one of the %NET_XMIT_* values on success.
- */
-int cxgb4_create_server(const struct net_device *dev, unsigned int stid,
-                        __be32 sip, __be16 sport, __be16 vlan,
-                        unsigned int queue)
-{
-	return  cxgb4_uld_server_create(dev, stid, sip, sport, vlan, queue, NULL);
-}
-EXPORT_SYMBOL(cxgb4_create_server);
-
 
 /**
  *     cxgb4_uld_server6_create_restricted - create a "restricted" IPv6 server
@@ -964,25 +944,6 @@ int cxgb4_uld_server6_create(const struct net_device *dev, unsigned int stid,
 }
 EXPORT_SYMBOL(cxgb4_uld_server6_create);
 
-/*
- *	cxgb4_create_server6 - create an IPv6 server
- *      @dev: the device
- *      @stid: the server TID
- *      @sip: local IPv6 address to bind server to
- *      @sport: the server's TCP port
- *      @queue: queue to direct messages from this server to
- *
- *      Create an IPv6 server for the given port and address.
- *      Returns <0 on error and one of the %NET_XMIT_* values on success.
- */
-int cxgb4_create_server6(const struct net_device *dev, unsigned int stid,
-                         const struct in6_addr *sip, __be16 sport,
-                         unsigned int queue)
-{
-	 return cxgb4_uld_server6_create(dev, stid, sip, sport, 0, queue, NULL);
-}
-EXPORT_SYMBOL(cxgb4_create_server6);
-
 int __cxgb4_uld_server_remove(const struct net_device *dev, unsigned int stid,
                              unsigned int queue, bool ipv6,
                              struct sk_buff *skb)
@@ -1016,13 +977,6 @@ int cxgb4_uld_server_remove(const struct net_device *dev, unsigned int stid,
        return __cxgb4_uld_server_remove(dev, stid, queue, ipv6, skb);
 }
 EXPORT_SYMBOL(cxgb4_uld_server_remove);
-
-int cxgb4_remove_server(const struct net_device *dev, unsigned int stid,
-                        unsigned int queue, bool ipv6)
-{
-       return cxgb4_uld_server_remove(dev, stid, queue, ipv6);
-}
-EXPORT_SYMBOL(cxgb4_remove_server);
 
 void cxgb4_uld_tid_ctrlq_id_sel_update(struct net_device *dev,
                                       u32 tid, u16 *ctrlq_index)
@@ -1263,11 +1217,15 @@ static struct cxgb4_uld_txq *cxgb4_uld_queues_txq_alloc(struct net_device *dev,
 
        txq = kzalloc(sizeof(*txq), GFP_NOWAIT);
        if (!txq)
-               return NULL;
+       {
+	       return NULL;
+       }
 
        ofldtxq = kzalloc(sizeof(*ofldtxq), GFP_NOWAIT);
        if (!ofldtxq)
-               goto out_free_txq;
+       {
+	       goto out_free_txq;
+       }
 
        memcpy(&txq->info, info, sizeof(txq->info));
        txq->ofldtxq = ofldtxq;
@@ -1285,7 +1243,9 @@ static struct cxgb4_uld_txq *cxgb4_uld_queues_txq_alloc(struct net_device *dev,
 
        ret = cxgb4_sge_uld_txq_alloc(dev, txq);
        if (ret < 0)
-               goto out_free_uld_txq;
+       {
+	       goto out_free_uld_txq;
+       }
 
        xa_lock_bh(&map->queues);
        ret = __xa_insert(&map->queues, txq->ofldtxq->q.cntxt_id, txq,
@@ -1506,21 +1466,6 @@ int cxgb4_ofld_send(struct net_device *dev, struct sk_buff *skb)
         return cxgb4_uld_xmit(dev, skb);
 }
 EXPORT_SYMBOL(cxgb4_ofld_send);
-
-/**
- *      cxgb4_crypto_send - send crypto packet
- *      @dev: the net device
- *      @skb: the packet
- *
- *      Sends crypto packet.  This is an exported version of @t4_crypto_send,
- *      intended for ULDs.
- */
-int cxgb4_crypto_send(struct net_device *dev, struct sk_buff *skb)
-{
-        return cxgb4_uld_xmit(dev, skb);
-}
-EXPORT_SYMBOL(cxgb4_crypto_send);
-
 int cxgb4_uld_xmit_direct(struct net_device *dev, bool control,
                          unsigned int index, const void *data,
                          unsigned int len)
@@ -2095,7 +2040,7 @@ static int cxgb4_uld_init_rdma(struct adapter *adap,
        ret = t4_query_params(adap, adap->mbox, adap->pf, 0, 2, params, val);
        if (ret < 0) {
                adap->params.max_ordird_qp = 8;
-               adap->params.max_ird_adapter = 32 * adap->tids.ntids;
+               adap->params.max_ird_adapter = 32 * adap->tidinfo.tids.size;;
                ret = 0;
        } else {
                adap->params.max_ordird_qp = val[0];
@@ -2409,6 +2354,149 @@ out_err:
 }
 //END------------------------ new cxgb4_uld.c from outbox -----------------------------END
 
+/* Flush the aggregated lro sessions */
+static void uldrx_flush_handler(struct sge_rspq *q)
+{
+	if (cxgb4_ulds[q->uld].lro_flush)
+		cxgb4_ulds[q->uld].lro_flush(&q->lro_mgr);
+}
+
+/**
+ *	uldrx_handler - response queue handler for ULD queues
+ *	@q: the response queue that received the packet
+ *	@rsp: the response queue descriptor holding the offload message
+ *	@gl: the gather list of packet fragments
+ *
+ *	Deliver an ingress offload packet to a ULD.  All processing is done by
+ *	the ULD, we just maintain statistics.
+ */
+static int uldrx_handler(struct sge_rspq *q, const __be64 *rsp,
+			 const struct pkt_gl *gl)
+{
+	struct adapter *adap = q->adap;
+	struct sge_ofld_rxq *rxq = container_of(q, struct sge_ofld_rxq, rspq);
+	int ret;
+
+	/* FW can send CPLs encapsulated in a CPL_FW4_MSG */
+	if (((const struct rss_header *)rsp)->opcode == CPL_FW4_MSG &&
+			((const struct cpl_fw4_msg *)(rsp + 1))->type == FW_TYPE_RSSCPL)
+		rsp += 2;
+
+	if (q->flush_handler)
+		ret = cxgb4_ulds[q->uld].lro_rx_handler(adap->uld_handle[q->uld],
+				rsp, gl, &q->lro_mgr,
+				&q->napi);
+	else
+		ret = cxgb4_ulds[q->uld].rx_handler(adap->uld_handle[q->uld],
+				rsp, gl);
+
+	if (ret) {
+		rxq->stats.nomem++;
+		return -1;
+	}
+
+	if (!gl)
+		rxq->stats.imm++;
+	else if (gl == CXGB4_MSG_AN)
+		rxq->stats.an++;
+	else
+		rxq->stats.pkts++;
+	return 0;
+}
+
+static int alloc_uld_rxqs(struct adapter *adap,
+			  struct sge_uld_rxq_info *rxq_info, bool lro)
+{
+	unsigned int nq = rxq_info->nrxq + rxq_info->nciq;
+	struct sge_ofld_rxq *q = rxq_info->uldrxq;
+	unsigned short *ids = rxq_info->rspq_id;
+	int i, err, msi_idx, que_idx = 0;
+	struct sge *s = &adap->sge;
+	unsigned int per_chan;
+
+	per_chan = rxq_info->nrxq / adap->params.nports;
+
+	if (adap->flags & CXGB4_USING_INTR_MULTI)
+		msi_idx = 1;
+	else
+		msi_idx = -((int)s->intrq.abs_id + 1);
+
+	for (i = 0; i < nq; i++, q++) {
+		if (i == rxq_info->nrxq) {
+			/* start allocation of concentrator queues */
+			per_chan = rxq_info->nciq / adap->params.nports;
+			que_idx = 0;
+		}
+
+		if (msi_idx >= 0) {
+			msi_idx = cxgb4_get_msix_idx_from_bmap(adap);
+			if (msi_idx < 0) {
+				err = -ENOSPC;
+				goto freeout;
+			}
+
+			snprintf(adap->msix_info[msi_idx].desc,
+				 sizeof(adap->msix_info[msi_idx].desc),
+				 "%s-%s%d",
+				 adap->port[0]->name, rxq_info->name, i);
+
+			q->msix = &adap->msix_info[msi_idx];
+		}
+		err = t4_sge_alloc_rxq(adap, &q->rspq, false,
+				       adap->port[que_idx++ / per_chan],
+				       msi_idx,
+				       q->fl.size ? &q->fl : NULL,
+				       uldrx_handler,
+				       lro ? uldrx_flush_handler : NULL,
+				       0);
+		if (err)
+			goto freeout;
+
+		memset(&q->stats, 0, sizeof(q->stats));
+		if (ids)
+			ids[i] = q->rspq.abs_id;
+	}
+	return 0;
+freeout:
+	q = rxq_info->uldrxq;
+	for ( ; i; i--, q++) {
+		if (q->rspq.desc)
+			free_rspq_fl(adap, &q->rspq,
+				     q->fl.size ? &q->fl : NULL);
+		if (q->msix)
+			cxgb4_free_msix_idx_in_bmap(adap, q->msix->idx);
+	}
+	return err;
+}
+static int
+setup_sge_queues_uld(struct adapter *adap, unsigned int uld_type, bool lro)
+{
+	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
+	int i, ret;
+
+	ret = alloc_uld_rxqs(adap, rxq_info, lro);
+	if (ret)
+		return ret;
+
+	/* Tell uP to route control queue completions to rdma rspq */
+	if (adap->flags & CXGB4_FULL_INIT_DONE && uld_type == CXGB4_ULD_RDMA) {
+		struct sge *s = &adap->sge;
+		unsigned int cmplqid;
+		u32 param, cmdop;
+
+		cmdop = FW_PARAMS_PARAM_DMAQ_EQ_CMPLIQID_CTRL;
+		for_each_port(adap, i) {
+			cmplqid = rxq_info->uldrxq[i].rspq.cntxt_id;
+			param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DMAQ) |
+				 FW_PARAMS_PARAM_X_V(cmdop) |
+				 FW_PARAMS_PARAM_YZ_V(s->ctrlq[i].q.cntxt_id));
+			ret = t4_set_params(adap, adap->mbox, adap->pf,
+					    0, 1, &param, &cmplqid);
+		}
+	}
+	return ret;
+}
+
 static void t4_free_uld_rxqs(struct adapter *adap, int n,
 			     struct sge_ofld_rxq *q)
 {
@@ -2445,6 +2533,82 @@ static void free_sge_queues_uld(struct adapter *adap, unsigned int uld_type)
 }
 
 
+static int cfg_queues_uld(struct adapter *adap, unsigned int uld_type,
+			  const struct cxgb4_uld_info *uld_info)
+{
+	struct sge *s = &adap->sge;
+	struct sge_uld_rxq_info *rxq_info;
+	int i, nrxq, ciq_size;
+
+	rxq_info = kzalloc(sizeof(*rxq_info), GFP_KERNEL);
+	if (!rxq_info)
+		return -ENOMEM;
+
+	if (adap->flags & CXGB4_USING_INTR_MULTI && uld_info->nrxq > s->nqs_per_uld) {
+		i = s->nqs_per_uld;
+		rxq_info->nrxq = roundup(i, adap->params.nports);
+	} else {
+		i = min_t(int, uld_info->nrxq,
+			  num_online_cpus());
+		rxq_info->nrxq = roundup(i, adap->params.nports);
+	}
+	if (!uld_info->ciq) {
+		rxq_info->nciq = 0;
+	} else  {
+		if (adap->flags & CXGB4_USING_INTR_MULTI)
+			rxq_info->nciq = min_t(int, s->nqs_per_uld,
+					       num_online_cpus());
+		else
+			rxq_info->nciq = min_t(int, MAX_OFLD_QSETS,
+					       num_online_cpus());
+		rxq_info->nciq = ((rxq_info->nciq / adap->params.nports) *
+				  adap->params.nports);
+		rxq_info->nciq = max_t(int, rxq_info->nciq,
+				       adap->params.nports);
+	}
+
+	nrxq = rxq_info->nrxq + rxq_info->nciq; /* total rxq's */
+	rxq_info->uldrxq = kcalloc(nrxq, sizeof(struct sge_ofld_rxq),
+				   GFP_KERNEL);
+	if (!rxq_info->uldrxq) {
+		kfree(rxq_info);
+		return -ENOMEM;
+	}
+
+	rxq_info->rspq_id = kcalloc(nrxq, sizeof(unsigned short), GFP_KERNEL);
+	if (!rxq_info->rspq_id) {
+		kfree(rxq_info->uldrxq);
+		kfree(rxq_info);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < rxq_info->nrxq; i++) {
+		struct sge_ofld_rxq *r = &rxq_info->uldrxq[i];
+
+		init_rspq(adap, &r->rspq, 5, 1, uld_info->rxq_size, 64);
+		r->rspq.uld = uld_type;
+		r->fl.size = 72;
+	}
+
+	ciq_size = 64 + adap->uld_inst.vres.cq.size + adap->tidinfo.ftids.size;
+	if (ciq_size > SGE_MAX_IQ_SIZE) {
+		dev_warn(adap->pdev_dev, "CIQ size too small for available IQs\n");
+		ciq_size = SGE_MAX_IQ_SIZE;
+	}
+
+	for (i = rxq_info->nrxq; i < nrxq; i++) {
+		struct sge_ofld_rxq *r = &rxq_info->uldrxq[i];
+
+		init_rspq(adap, &r->rspq, 5, 1, ciq_size, 64);
+		r->rspq.uld = uld_type;
+	}
+
+	memcpy(rxq_info->name, uld_info->name, IFNAMSIZ);
+	adap->sge.uld_rxq_info[uld_type] = rxq_info;
+
+	return 0;
+}
+
 static void free_queues_uld(struct adapter *adap, unsigned int uld_type)
 {
 	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
@@ -2453,6 +2617,38 @@ static void free_queues_uld(struct adapter *adap, unsigned int uld_type)
 	kfree(rxq_info->rspq_id);
 	kfree(rxq_info->uldrxq);
 	kfree(rxq_info);
+}
+
+static int
+request_msix_queue_irqs_uld(struct adapter *adap, unsigned int uld_type)
+{
+	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
+	struct msix_info *minfo;
+	unsigned int idx;
+	int err = 0;
+
+	for_each_uldrxq(rxq_info, idx) {
+		minfo = rxq_info->uldrxq[idx].msix;
+		err = request_irq(minfo->vec,
+				  t4_sge_intr_msix, 0,
+				  minfo->desc,
+				  &rxq_info->uldrxq[idx].rspq);
+		if (err)
+			goto unwind;
+
+		cxgb4_set_msix_aff(adap, minfo->vec,
+				   &minfo->aff_mask, idx);
+	}
+	return 0;
+
+unwind:
+	while (idx-- > 0) {
+		minfo = rxq_info->uldrxq[idx].msix;
+		cxgb4_clear_msix_aff(minfo->vec, minfo->aff_mask);
+		cxgb4_free_msix_idx_in_bmap(adap, minfo->idx);
+		free_irq(minfo->vec, &rxq_info->uldrxq[idx].rspq);
+	}
+	return err;
 }
 
 static void
@@ -2470,6 +2666,21 @@ free_msix_queue_irqs_uld(struct adapter *adap, unsigned int uld_type)
 	}
 }
 
+static void enable_rx_uld(struct adapter *adap, unsigned int uld_type)
+{
+	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
+	int idx;
+
+	for_each_uldrxq(rxq_info, idx) {
+		struct sge_rspq *q = &rxq_info->uldrxq[idx].rspq;
+
+		if (!q)
+			continue;
+
+		cxgb4_enable_rx(adap, q);
+	}
+}
+
 static void quiesce_rx_uld(struct adapter *adap, unsigned int uld_type)
 {
 	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
@@ -2483,20 +2694,6 @@ static void quiesce_rx_uld(struct adapter *adap, unsigned int uld_type)
 
 		cxgb4_quiesce_rx(q);
 	}
-}
-
-static void uld_queue_init(struct adapter *adap, unsigned int uld_type,
-			   struct cxgb4_lld_info *lli)
-{
-	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
-	int tx_uld_type = TX_ULD(uld_type);
-	struct sge_uld_txq_info *txq_info = adap->sge.uld_txq_info[tx_uld_type];
-
-	lli->rxq_ids = rxq_info->rspq_id;
-	lli->nrxq = rxq_info->nrxq;
-	lli->ciq_ids = rxq_info->rspq_id + rxq_info->nrxq;
-	lli->nciq = rxq_info->nciq;
-	lli->ntxq = txq_info->ntxq;
 }
 
 int t4_uld_mem_alloc(struct adapter *adap)
@@ -2534,7 +2731,7 @@ static void cxgb4_shutdown_uld_adapter(struct adapter *adap, enum cxgb4_uld_type
 {
 	if (adap->uld_handle[type]) {
 		adap->uld_handle[type]= NULL;
-		adap->uld[type].add = NULL;
+		cxgb4_ulds[type].add = NULL;
 
 		if (adap->flags & CXGB4_FULL_INIT_DONE)
 			quiesce_rx_uld(adap, type);
@@ -2564,28 +2761,47 @@ void t4_uld_clean_up(struct adapter *adap)
 	mutex_unlock(&uld_mutex);
 }
 
-static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld)
+static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld, unsigned int uld)
 {
-	int i;
+	unsigned short i;
+	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld];
+
+	if (!cxgb4_uld_supported_any(adap))
+		return;
 
 	lld->pdev = cxgb4_pci_dev(adap);
 	lld->plat_dev = cxgb4_is_platform_device(adap);
 	lld->pf = adap->pf;
 	lld->l2t = adap->l2t;
-	lld->tids = &adap->tids;
+	lld->uld_tids.tids.start = adap->tidinfo.tids.start;
+	lld->uld_tids.tids.size = adap->tidinfo.tids.size;
+	lld->uld_tids.atids.start = adap->tidinfo.atids.start;
+	lld->uld_tids.atids.size = adap->tidinfo.atids.size;
+	lld->uld_tids.hpftids.start = adap->tidinfo.hpftids.start;
+	lld->uld_tids.hpftids.size = adap->tidinfo.hpftids.size;
+	lld->uld_tids.ftids.start = adap->tidinfo.ftids.start;
+	lld->uld_tids.ftids.size = adap->tidinfo.ftids.size;
+	lld->uld_tids.stids.start = adap->tidinfo.stids.start;
+	lld->uld_tids.stids.size = adap->tidinfo.stids.size;
 	lld->ports = adap->port;
 	lld->vr = &adap->uld_inst.vres;
 	lld->mtus = adap->params.mtus;
+	if (uld == CXGB4_ULD_RDMA) {
+		lld->rxq_ids = rxq_info->rspq_id;
+		lld->ciq_ids = rxq_info->rspq_id + rxq_info->nrxq;
+		lld->nrxq = rxq_info->nrxq;
+		lld->nciq = rxq_info->nciq;
+		lld->ctrlq_start = CXGB4_ULD_CTRLQ_INDEX_RDMA;
+	}
 	lld->nchan = adap->params.nports;
 	lld->nports = adap->params.nports;
 	lld->wr_cred = adap->params.ofldq_wr_cred;
-	lld->ulp_crypto = adap->params.crypto;
-	lld->iscsi_iolen = MAXRXDATA_G(t4_read_reg(adap, TP_PARA_REG2_A));
+	lld->adapter_type = adap->params.chip;
 	lld->iscsi_ppm = &adap->uld_inst.iscsi_ppm;
 	lld->iscsi_tagmask = t4_read_reg(adap, ULP_RX_ISCSI_TAGMASK_A);
 	lld->iscsi_pgsz_order = t4_read_reg(adap, ULP_RX_ISCSI_PSZ_A);
-	if (CHELSIO_CHIP_VERSION(adap->params.chip) >= CHELSIO_T6)
-	{
+
+	if (CHELSIO_CHIP_VERSION(adap->params.chip) >= CHELSIO_T6) {
 		u32 val = t4_read_reg(adap, ULP_RX_MISC_FEATURE_ENABLE_A);
 		lld->iscsi_all_cmp_mode = !!(val & ISCSI_ALL_CMP_MODE_F);
 	}
@@ -2605,38 +2821,44 @@ static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld)
 		}
 	}
 
+	lld->max_pdu_size = MAXRXDATA_G(t4_read_reg(adap, TP_PARA_REG2_A));
 	lld->cnvme_ddp = &adap->uld_inst.cnvme_ddp;
 	lld->rdma_resource = &adap->uld_inst.rdma_resource;
-	lld->adapter_type = adap->params.chip;
 	lld->cclk_ps = 1000000000 / adap->params.vpd.cclk;
 	lld->udb_density = 1 << adap->params.sge.eq_qpp;
 	lld->ucq_density = 1 << adap->params.sge.iq_qpp;
 	lld->sge_host_page_size = 1 << (adap->params.sge.hps + 10);
 	lld->filt_mode = adap->params.tp.vlan_pri_map;
-	/* MODQ_REQ_MAP sets queues 0-3 to chan 0-3 */
+
 	for (i = 0; i < NCHAN; i++)
-		lld->tx_modq[i] = i;
+		lld->tx_modq[i] = adap->params.tp.tx_modq[i];
 	if (cxgb4_is_platform_device(adap)) {
 		lld->db_reg = adap->sge.tx_db_addr;
 		lld->gts_reg = adap->sge.rx_db_addr;
 		lld->db_gts_pa = adap->sge.db_gts_pa;
 	} else {
-		lld->gts_reg = adap->regs + MYPF_REG(SGE_PF_GTS_A);
 		lld->db_reg = adap->regs + MYPF_REG(SGE_PF_KDOORBELL_A);
+		lld->gts_reg = adap->regs + MYPF_REG(SGE_PF_GTS_A);
 	}
+
 	lld->fw_vers = adap->params.fw_vers;
-	lld->dbfifo_int_thresh = dbfifo_int_thresh;
+	lld->dbfifo_int_thresh = LP_INT_THRESH_G(t4_read_reg(adap,
+				SGE_DBFIFO_STATUS_A));
 	lld->sge_ingpadboundary = adap->sge.fl_align;
-	lld->sge_egrstatuspagesize = adap->sge.stat_len;
 	lld->sge_pktshift = adap->sge.pktshift;
+	lld->sge_egrstatuspagesize = adap->sge.stat_len;
 	lld->enable_fw_ofld_conn = adap->flags & CXGB4_FW_OFLD_CONN;
 	lld->max_ordird_qp = adap->params.max_ordird_qp;
 	lld->max_ird_adapter = adap->params.max_ird_adapter;
 	lld->ulptx_memwrite_dsgl = adap->params.ulptx_memwrite_dsgl;
+	lld->dev_512sgl_mr = adap->params.dev_512sgl_mr;
+	lld->ulp_crypto = adap->params.crypto;
 	lld->nodeid = dev_to_node(adap->pdev_dev);
 	lld->fr_nsmr_tpte_wr_support = adap->params.fr_nsmr_tpte_wr_support;
 	lld->write_w_imm_support = adap->params.write_w_imm_support;
+	lld->relaxed_ordering = cxgb4_pcie_relaxed_ordering_enabled(adap);
 	lld->write_cmpl_support = adap->params.write_cmpl_support;
+	lld->neq = adap->params.pfres.neq;
 	lld->sendpath_enabled = cxgb4_uld_sendpath_enabled(adap);
 	lld->num_up_cores = adap->params.num_up_cores;
 	lld->tid_qid_sel_mask = adap->params.tid_qid_sel_mask;
@@ -2648,10 +2870,8 @@ int uld_attach(struct adapter *adap, unsigned int uld)
 	struct cxgb4_lld_info lli = {0};
 	void *handle;
 
-	uld_init(adap, &lli);
-	uld_queue_init(adap, uld, &lli);
-
-	handle = adap->uld[uld].add(&lli);
+	uld_init(adap, &lli, uld);
+	handle = cxgb4_ulds[uld].add(&lli);
 	if (IS_ERR(handle)) {
 		dev_warn(adap->pdev_dev,
 			 "could not attach to the %s driver, error %ld\n",
@@ -2663,18 +2883,11 @@ int uld_attach(struct adapter *adap, unsigned int uld)
 	t4_register_netevent_notifier();
 
 	if (adap->flags & CXGB4_FULL_INIT_DONE)
-		adap->uld[uld].state_change(handle, CXGB4_STATE_UP);
-
+		cxgb4_ulds[uld].state_change(handle, CXGB4_STATE_UP);
 	return 0;
 }
 
 #if IS_ENABLED(CONFIG_CHELSIO_TLS_DEVICE)
-static bool cxgb4_uld_in_use(struct adapter *adap)
-{
-	const struct tid_info *t = &adap->tids;
-
-	return (atomic_read(&t->conns_in_use) || t->stids_in_use);
-}
 
 /* cxgb4_set_ktls_feature: request FW to enable/disable ktls settings.
  * @adap: adapter info
@@ -2694,11 +2907,6 @@ int cxgb4_set_ktls_feature(struct adapter *adap, bool enable)
 			/* At this moment if ULD connection are up means, other
 			 * ULD is/are already active, return failure.
 			 */
-			if (cxgb4_uld_in_use(adap)) {
-				dev_dbg(adap->pdev_dev,
-					"ULD connections (tid/stid) active. Can't enable kTLS\n");
-				return -EINVAL;
-			}
 			ret = t4_set_params(adap, adap->mbox, adap->pf,
 					    0, 1, &params, &params);
 			if (ret)
@@ -2730,6 +2938,40 @@ int cxgb4_set_ktls_feature(struct adapter *adap, bool enable)
 #endif
 
 
+static void cxgb4_uld_alloc_resources(struct adapter *adap,
+				      enum cxgb4_uld_type type,
+				      const struct cxgb4_uld_info *p)
+{
+	int ret = 0;
+
+	if ((type == CXGB4_ULD_CRYPTO && !is_pci_uld(adap)) ||
+	    (type != CXGB4_ULD_CRYPTO && !cxgb4_uld_supported_any(adap)))
+		return;
+	if (type == CXGB4_ULD_ISCSIT && is_t4(adap->params.chip))
+		return;
+	ret = cfg_queues_uld(adap, type, p);
+	if (ret)
+		goto out;
+	ret = setup_sge_queues_uld(adap, type, p->lro);
+	if (ret)
+		goto free_queues;
+	if (adap->flags & CXGB4_USING_INTR_MULTI) {
+		ret = request_msix_queue_irqs_uld(adap, type);
+		if (ret)
+			goto free_rxq;
+	}
+	if (adap->flags & CXGB4_FULL_INIT_DONE)
+		enable_rx_uld(adap, type);
+	return;
+free_rxq:
+	free_sge_queues_uld(adap, type);
+free_queues:
+	free_queues_uld(adap, type);
+out:
+	dev_warn(adap->pdev_dev,
+		 "ULD registration failed for uld type %d\n", type);
+}
+
 /* cxgb4_register_uld - register an upper-layer driver
  * @type: the ULD type
  * @p: the ULD methods
@@ -2740,7 +2982,6 @@ int cxgb4_set_ktls_feature(struct adapter *adap, bool enable)
 void cxgb4_register_uld(enum cxgb4_uld_type type,
 			const struct cxgb4_uld_info *p)
 {
-//	struct cxgb4_uld_list *uld_entry;
 	struct adapter *adap = NULL;
 
 	if (type >= CXGB4_ULD_TYPE_MAX)
@@ -2754,17 +2995,22 @@ void cxgb4_register_uld(enum cxgb4_uld_type type,
 	}
 
 	mutex_lock(&uld_mutex);
-	adap->uld[type] = *p;
+	if (cxgb4_ulds[type].add) {
+		goto out;
+	}
+	cxgb4_ulds[type] = *p;
 	list_for_each_entry(adap, &adapter_list, list_node) {
-		if (adap->flags & CXGB4_FULL_INIT_DONE)
+		mutex_lock(&adap->uld_inst.uld_mutex);
+		if (adap->flags & CXGB4_FULL_INIT_DONE) {
+			cxgb4_uld_alloc_resources(adap, type, p);
 			cxgb4_uld_txq_alloc_shared(adap, type);
+		}
 		uld_attach(adap, type);
-		//		cxgb4_uld_alloc_resources(adap, type, p);
+		mutex_unlock(&adap->uld_inst.uld_mutex);
 	}
 
-	//uld_entry->uld_type = type;
-	//list_add_tail(&uld_entry->list_node, &uld_list);
 	mutex_unlock(&uld_mutex);
+out:
 	return;
 }
 EXPORT_SYMBOL(cxgb4_register_uld);
@@ -2777,7 +3023,6 @@ EXPORT_SYMBOL(cxgb4_register_uld);
  */
 int cxgb4_unregister_uld(enum cxgb4_uld_type type)
 {
-//	struct cxgb4_uld_list *uld_entry, *tmp;
 	struct adapter *adap;
 
 	if (type >= CXGB4_ULD_TYPE_MAX)
@@ -2785,23 +3030,16 @@ int cxgb4_unregister_uld(enum cxgb4_uld_type type)
 
 	mutex_lock(&uld_mutex);
 	list_for_each_entry(adap, &adapter_list, list_node) {
-		if ((type == CXGB4_ULD_CRYPTO && !is_pci_uld(adap)) ||
-		    (type != CXGB4_ULD_CRYPTO && !cxgb4_uld_supported_any(adap)))
-			continue;
-		if (type == CXGB4_ULD_ISCSIT && is_t4(adap->params.chip))
-			continue;
-
-		cxgb4_shutdown_uld_adapter(adap, type);
-	}
-
-	list_for_each_entry(adap, &adapter_list, list_node) {
-		if (adap->flags & CXGB4_FULL_INIT_DONE)
+		mutex_lock(&adap->uld_inst.uld_mutex);
+		if (adap->flags & CXGB4_FULL_INIT_DONE) {
 			cxgb4_uld_txq_free_shared(adap, type);
+			cxgb4_shutdown_uld_adapter(adap, type);
+		}
 		adap->uld_handle[type] = NULL;
+		mutex_unlock(&adap->uld_inst.uld_mutex);
 	}
-	adap->uld[type].add = NULL;
+	cxgb4_ulds[type].add = NULL;
 	mutex_unlock(&uld_mutex);
-
 	return 0;
 }
 EXPORT_SYMBOL(cxgb4_unregister_uld);

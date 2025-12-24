@@ -139,6 +139,7 @@ static void cxgb4_sge_egr_map_erase(struct xarray *map, unsigned int index)
 static int cxgb4_sge_egr_map_insert(struct xarray *map, unsigned int index,
                                    void *data)
 {
+	xa_erase_bh(map, index);
        return xa_insert_bh(map, index, data, GFP_NOWAIT);
 }
 
@@ -673,7 +674,9 @@ static void *alloc_ring(struct device *dev, size_t nelem, size_t elem_size,
 	void *p = dma_alloc_coherent(dev, len, phys, GFP_NOWAIT);
 
 	if (!p)
+	{
 		return NULL;
+	}
 	if (sw_size) {
 		s = kcalloc_node(sw_size, nelem, GFP_NOWAIT, node);
 
@@ -1535,7 +1538,7 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 #if IS_ENABLED(CONFIG_CHELSIO_TLS_DEVICE)
 	if (tls_is_skb_tx_device_offloaded(skb) &&
 	    (skb->len - skb_tcp_all_headers(skb)))
-		return adap->uld[CXGB4_ULD_KTLS].tx_handler(skb, dev);
+		return cxgb4_ulds[CXGB4_ULD_KTLS].tx_handler(skb, dev);
 #endif /* CHELSIO_TLS_DEVICE */
 
 	qidx = skb_get_queue_mapping(skb);
@@ -1552,8 +1555,8 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
-	if (xfrm_offload(skb) && adap->uld[CXGB4_ULD_IPSEC].tx_handler) {
-		return adap->uld[CXGB4_ULD_IPSEC].tx_handler(skb, dev);
+	if (xfrm_offload(skb) && cxgb4_ulds[CXGB4_ULD_IPSEC].tx_handler) {
+		return cxgb4_ulds[CXGB4_ULD_IPSEC].tx_handler(skb, dev);
 	}
 #endif /* CONFIG_CHELSIO_IPSEC_INLINE */
 	skb_tx_timestamp(skb);
@@ -2753,8 +2756,8 @@ static u32 cxgb4_sge_uld_ctrlq_index(struct net_device *dev,
                index += CXGB4_ULD_CTRLQ_INDEX_CSTOR;
                break;
        default:
-               index += CXGB4_ULD_CTRLQ_INDEX_TOE;
-               break;
+		pr_err("cxgb4_sge_uld_ctrlq_index uld type is not avialble\n");
+		return -EINVAL;
        }
 
        return index;
@@ -2775,7 +2778,7 @@ int cxgb4_sge_xmit_ctrl(struct net_device *dev, struct sk_buff *skb)
        int ret=0;
 
        /* Single ctrl queue is a requirement for LE workaround path */
-       if (adap->tids.nsftids)
+       if (adap->tidinfo.sftids.size)
                idx = 0;
 
        local_bh_disable();
@@ -4423,6 +4426,7 @@ static int cxgb4_sge_init_txq(struct adapter *adap, struct sge_txq *q,
 	q->stops = q->restarts = 0;
 	q->stat = (void *)&q->desc[q->size];
 	spin_lock_init(&q->db_lock);
+	q->lb_queue_type = 0;
 	return 0;
 }
 
@@ -4676,6 +4680,10 @@ static void cxgb4_sge_ofld_txq_free(struct net_device *dev,
 {
        struct adapter *adap = netdev2adap(dev);
 
+       if (txq->q.lb_queue_type == CXGB4_TXQ_LB_TYPE_CRYPTO) {
+               t4_ctrl_eq_free(adap, adap->mbox, adap->pf, 0, txq->q.cntxt_id);
+               return;
+       }
        t4_ofld_eq_free(adap, adap->mbox, adap->pf, 0, txq->q.cntxt_id);
 }
 
@@ -4757,6 +4765,9 @@ static int cxgb4_sge_ofld_txq_alloc(struct net_device *dev,
 	else
 		fb_min = FETCHBURSTMIN_64B_T6_X;
 
+	if (unlikely(txq->q.lb_queue_type == CXGB4_TXQ_LB_TYPE_CRYPTO))
+		cmd = FW_EQ_CTRL_CMD;
+	else
 		cmd = FW_EQ_OFLD_CMD;
 
 	memset(&c, 0, sizeof(c));
@@ -4782,11 +4793,20 @@ static int cxgb4_sge_ofld_txq_alloc(struct net_device *dev,
 
 	ret = t4_wr_mbox_ns(adap, adap->mbox, &c, sizeof(c), &c);
 	if (ret < 0)
+	{
 		return ret;
+	}
+
+	if (unlikely(txq->q.lb_queue_type == CXGB4_TXQ_LB_TYPE_CRYPTO))
+		cmd = FW_EQ_CTRL_CMD_EQID_G(ntohl(c.eqid_pkd));
+	else
+		cmd = FW_EQ_OFLD_CMD_EQID_G(ntohl(c.eqid_pkd));
 
 	ret = cxgb4_sge_init_txq(adap, &txq->q, cmd);
 	if (ret < 0)
+	{
 		goto out_free_txq_hw;
+	}
 
 	return 0;
 
@@ -4873,6 +4893,7 @@ int cxgb4_sge_uld_txq_alloc(struct net_device *dev,
 {
 	struct sge_uld_txq *txq = uld_txq->ofldtxq;
 	struct adapter *adap = netdev2adap(dev);
+	enum cxgb4_txq_lb_type lbtype = 0;
 	struct sge *s = &adap->sge;
 	int ret, nentries;
 
@@ -4885,8 +4906,14 @@ int cxgb4_sge_uld_txq_alloc(struct net_device *dev,
 			&txq->q.phys_addr, &txq->q.sdesc,
 			s->stat_len, NUMA_NO_NODE);
 	if (!txq->q.desc)
+	{
 		return -ENOMEM;
+	}
 
+	if (uld_txq->uld == CXGB4_ULD_CRYPTO)
+		lbtype = CXGB4_TXQ_LB_TYPE_CRYPTO;
+
+	txq->q.lb_queue_type = lbtype;
 	txq->q.q_type = CXGB4_TXQ_ULD;
 	txq->adap = adap;
 
@@ -4896,7 +4923,9 @@ int cxgb4_sge_uld_txq_alloc(struct net_device *dev,
 		ret = cxgb4_sge_ofld_txq_alloc(dev, uld_txq);
 
 	if (ret < 0)
+	{
 		goto out_free_ring;
+	}
 
 	skb_queue_head_init(&txq->sendq);
 	tasklet_init(&txq->qresume_tsk, cxgb4_sge_uld_xmit_restart,
@@ -4906,6 +4935,7 @@ int cxgb4_sge_uld_txq_alloc(struct net_device *dev,
 	return 0;
 
 out_free_ring:
+	txq->q.lb_queue_type = 0;
 	txq->q.q_type = 0;
 	txq->adap = NULL;
 
@@ -4965,12 +4995,6 @@ int cxgb4_sge_txq_sync_pidx(struct net_device *dev, u16 qid, u16 pidx, u16 size)
 out:
        return ret;
 }
-
-int cxgb4_sync_txq_pidx(struct net_device *dev, u16 qid, u16 pidx, u16 size)
-{
-	return cxgb4_sge_txq_sync_pidx(dev, qid, pidx, size);
-}
-EXPORT_SYMBOL(cxgb4_sync_txq_pidx);
 
 void cxgb4_sge_txq_sync_pidx_locked(struct net_device *dev, struct sge_txq *q)
 {

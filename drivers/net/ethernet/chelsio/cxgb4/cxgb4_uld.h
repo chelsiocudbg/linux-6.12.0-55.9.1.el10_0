@@ -487,7 +487,7 @@ struct ch_ktls_stats_debug {
 struct cxgb4_lld_info {
 	struct pci_dev *pdev;                /* associated PCI device */
 	struct l2t_data *l2t;                /* L2 table */
-	struct tid_info *tids;               /* TID table */
+	struct cxgb4_uld_tid_info uld_tids;  /* ULD TID info */
 	struct net_device **ports;           /* device ports */
 	const struct cxgb4_virt_res *vr;     /* assorted HW resources */
 	const unsigned short *mtus;          /* MTU table */
@@ -504,6 +504,7 @@ struct cxgb4_lld_info {
 	unsigned char adapter_type;          /* type of adapter */
 	unsigned char fw_api_ver;            /* FW API version */
 	unsigned int fw_vers;                /* FW version */
+	unsigned int max_pdu_size;           /* max iSCSI and NVMe/TCP pdu size */
 	unsigned int iscsi_iolen;            /* iSCSI max I/O length */
 	unsigned int cclk_ps;                /* Core clock period in psec */
 	unsigned short udb_density;          /* # of user DB/page */
@@ -526,6 +527,7 @@ struct cxgb4_lld_info {
 	unsigned int max_ordird_qp;          /* Max ORD/IRD depth per RDMA QP */
 	unsigned int max_ird_adapter;        /* Max IRD memory per adapter */
 	bool ulptx_memwrite_dsgl;            /* use of T5 DSGL allowed */
+	bool dev_512sgl_mr;                  /* support 512 pbl entries per FR MR*/
 	unsigned int iscsi_tagmask;	     /* iscsi ddp tag mask */
 	unsigned int iscsi_pgsz_order;	     /* iscsi ddp page size orders */
 	unsigned int iscsi_llimit;	     /* chip's iscsi region llimit */
@@ -536,7 +538,9 @@ struct cxgb4_lld_info {
 	int nodeid;			     /* device numa node id */
 	bool fr_nsmr_tpte_wr_support;	     /* FW supports FR_NSMR_TPTE_WR */
 	bool write_w_imm_support;            /* FW supports WRITE_WITH_IMMEDIATE */
+	bool relaxed_ordering;               /* OK to use PCIe Relaxed Ordering */
 	bool write_cmpl_support;             /* FW supports WRITE_CMPL WR */
+	unsigned int neq;                    /* Max # of Tx queues supported by FW */
 	bool sendpath_enabled;               /* FW supports Tx SENDPATH */
 	bool cpl_nvmt_data_iqe;              /* HW delivers CPL_NVMT_DATA in IQE */
 	bool cpl_iscsi_data_iqe;             /* HW delivers CPL_ISCSI_DATA in IQE */
@@ -577,6 +581,7 @@ struct cxgb4_uld_info {
 #endif
 };
 
+extern struct cxgb4_uld_info cxgb4_ulds[CXGB4_ULD_TYPE_MAX];
 unsigned int cxgb4_modparam_enable_ulds(void);
 int uld_attach(struct adapter *adap, unsigned int uld);
 void cxgb4_register_uld(enum cxgb4_uld_type type, const struct cxgb4_uld_info *p);
@@ -588,10 +593,6 @@ unsigned int cxgb4_dbfifo_count(const struct net_device *dev, int lpfifo);
 unsigned int cxgb4_port_chan(const struct net_device *dev);
 u8 cxgb4_port_tx_chan(const struct net_device *dev);
 
-#if 0
-// ------------ commenting for now -----------
-u8 cxgb4_port_rx_chan(const struct net_device *dev);
-#endif
 unsigned int cxgb4_port_e2cchan(const struct net_device *dev);
 unsigned int cxgb4_port_viid(const struct net_device *dev);
 unsigned int cxgb4_port_idx(const struct net_device *dev);

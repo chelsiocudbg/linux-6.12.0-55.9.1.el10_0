@@ -194,6 +194,7 @@ static struct net_device_ops cxgb4_netdev_ops;
 LIST_HEAD(adapter_list);
 DEFINE_MUTEX(uld_mutex);
 LIST_HEAD(uld_list);
+struct cxgb4_uld_info cxgb4_ulds[CXGB4_ULD_TYPE_MAX];
 unsigned int cxgb4_modparam_enable_ulds(void)
 {
 	return enable_ulds;
@@ -265,7 +266,7 @@ static bool cxgb4_modparam_ro_force_off(void)
 	return ro_force_off;
 }
 
-static bool cxgb4_pcie_relaxed_ordering_enabled(struct adapter *adap)
+bool cxgb4_pcie_relaxed_ordering_enabled(struct adapter *adap)
 {
 	return cxgb4_common_relaxed_ordering_enabled(adap) &&
 		!cxgb4_modparam_ro_force_off();
@@ -725,7 +726,7 @@ static int fwevtq_handler(struct sge_rspq *q, const __be64 *rsp,
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
        if (unlikely(opcode == CPL_FW6_MSG &&
            ((const struct cpl_fw6_msg *)rsp)->type == FW_TYPE_IPSEC_SA)) {
-               struct cxgb4_uld_info *uld = &q->adap->uld[CXGB4_ULD_IPSEC];
+               struct cxgb4_uld_info *uld = &cxgb4_ulds[CXGB4_ULD_IPSEC];
 
                uld->rx_handler(q->adap->uld_handle[CXGB4_ULD_IPSEC],
                                rsp, gl);
@@ -1196,7 +1197,7 @@ static int setup_sge_queues(struct adapter *adap)
 	struct sge_uld_rxq_info *rxq_info = NULL;
 	struct sge *s = &adap->sge;
 	unsigned int cmplqid = 0;
-	int err, i, j, msix = 0;
+	int err, i, j, k, msix = 0;
 
 	if (is_uld(adap))
 		rxq_info = s->uld_rxq_info[CXGB4_ULD_RDMA];
@@ -1253,10 +1254,14 @@ static int setup_sge_queues(struct adapter *adap)
 		if (rxq_info)
 			cmplqid	= rxq_info->uldrxq[i].rspq.cntxt_id;
 
-		err = t4_sge_alloc_ctrl_txq(adap, &s->ctrlq[i], adap->port[i],
-					    s->fw_evtq.cntxt_id, cmplqid, 0);
-		if (err)
-			goto freeout;
+		/* Allocate at least num_up_cores control queues per port */
+		j = i * adap->params.num_up_cores;
+		for (k = 0; k < adap->params.num_up_cores; k++, j++) {
+			err = t4_sge_alloc_ctrl_txq(adap, &s->ctrlq[j], adap->port[i],
+						    s->fw_evtq.cntxt_id, cmplqid, k);
+			if (err)
+				goto freeout;
+		}
 	}
 
 	if (!is_t4(adap->params.chip)) {
@@ -1992,7 +1997,7 @@ static void notify_rdma_uld(struct adapter *adap, enum cxgb4_control cmd)
 	if (!adap->uld_handle[CXGB4_ULD_RDMA])
 		return;
 
-	adap->uld[CXGB4_ULD_RDMA].control(adap->uld_handle[CXGB4_ULD_RDMA],
+	cxgb4_ulds[CXGB4_ULD_RDMA].control(adap->uld_handle[CXGB4_ULD_RDMA],
 			cmd);
 }
 
@@ -2125,11 +2130,13 @@ static void notify_ulds(struct adapter *adap, enum cxgb4_state new_state)
 {
 	unsigned int i;
 
-	mutex_lock(&uld_mutex);
 	for (i = 0; i < CXGB4_ULD_TYPE_MAX; i++)
+	{
+		mutex_lock(&adap->uld_inst.uld_mutex);
 		if (adap->uld_handle[i])
-			adap->uld[i].state_change(adap->uld_handle[i], new_state);
-	mutex_unlock(&uld_mutex);
+			cxgb4_ulds[i].state_change(adap->uld_handle[i], new_state);
+		mutex_unlock(&adap->uld_inst.uld_mutex);
+	}
 }
 
 static void check_neigh_update(struct neighbour *neigh)
@@ -2179,7 +2186,8 @@ static void attach_ulds(struct adapter *adap)
         list_add_tail(&adap->list_node, &adapter_list);
         for (i = 0; i < CXGB4_ULD_TYPE_MAX; i++) {
                 mutex_lock(&adap->uld_inst.uld_mutex);
-                if (adap->uld != NULL && adap->uld[i].add) {
+		mutex_unlock(&uld_mutex);
+		if (cxgb4_ulds[i].add) {
                         if (adap->flags & CXGB4_FULL_INIT_DONE)
                                 cxgb4_uld_txq_alloc_shared(adap, i);
                         uld_attach(adap, i);
@@ -2200,10 +2208,17 @@ static void detach_ulds(struct adapter *adap)
 	list_del(&adap->list_node);
 
 	for (i = 0; i < CXGB4_ULD_TYPE_MAX; i++)
+	{
+		mutex_lock(&adap->uld_inst.uld_mutex);
 		if (adap->uld_handle[i]) {
-			adap->uld[i].state_change(adap->uld_handle[i],
+			cxgb4_ulds[i].state_change(adap->uld_handle[i],
 					CXGB4_STATE_DETACH);
+			if (adap->flags & CXGB4_FULL_INIT_DONE)
+				cxgb4_uld_txq_free_shared(adap, i);
+			adap->uld_handle[i] = NULL;
 		}
+		mutex_unlock(&adap->uld_inst.uld_mutex);
+	}
 
 	if (netevent_registered && list_empty(&adapter_list)) {
 		unregister_netevent_notifier(&cxgb4_netevent_nb);
@@ -5138,8 +5153,8 @@ static int cfg_queues(struct adapter *adap)
 		 */
 
 		if (adap->params.tid_qid_sel_mask &&
-			s->ofldqsets < adap->params.num_up_cores)
-			s->ofldqsets = adap->params.num_up_cores;
+			s->ofldqsets < adap->params.num_up_cores * adap->params.nports)
+			s->ofldqsets = adap->params.num_up_cores * adap->params.nports;
 
 		avail_qsets -= num_ulds * s->ofldqsets;
 	}
@@ -5798,7 +5813,7 @@ u16 cxgb4_uld_xfrm_ipsecidx_get(struct xfrm_state *xfrm)
 
        mutex_lock(&adap->uld_inst.uld_mutex);
        if (likely(adap->uld_handle[CXGB4_ULD_IPSEC]))
-               ret = adap->uld[CXGB4_ULD_IPSEC].xfrm_ipsecidx_get(xfrm);
+               ret = cxgb4_ulds[CXGB4_ULD_IPSEC].xfrm_ipsecidx_get(xfrm);
        mutex_unlock(&adap->uld_inst.uld_mutex);
 
        mutex_unlock(&uld_mutex);
@@ -5821,7 +5836,7 @@ static int chcr_offload_state(struct adapter *adap,
 			dev_dbg(adap->pdev_dev, "ch_ktls driver is not loaded\n");
 			return -EOPNOTSUPP;
 		}
-		if (!adap->uld[CXGB4_ULD_KTLS].tlsdev_ops) {
+		if (!cxgb4_ulds[CXGB4_ULD_KTLS].tlsdev_ops) {
 			dev_dbg(adap->pdev_dev,
 				"ch_ktls driver has no registered tlsdev_ops\n");
 			return -EOPNOTSUPP;
@@ -5834,7 +5849,7 @@ static int chcr_offload_state(struct adapter *adap,
 			dev_dbg(adap->pdev_dev, "chipsec driver is not loaded\n");
 			return -EOPNOTSUPP;
 		}
-		if (!adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops) {
+		if (!cxgb4_ulds[CXGB4_ULD_IPSEC].xfrmdev_ops) {
 			dev_dbg(adap->pdev_dev,
 				"chipsec driver has no registered xfrmdev_ops\n");
 			return -EOPNOTSUPP;
@@ -5871,7 +5886,7 @@ static int cxgb4_ktls_dev_add(struct net_device *netdev, struct sock *sk,
 	if (ret)
 		goto out_unlock;
 
-	ret = adap->uld[CXGB4_ULD_KTLS].tlsdev_ops->tls_dev_add(netdev, sk,
+	ret = cxgb4_ulds[CXGB4_ULD_KTLS].tlsdev_ops->tls_dev_add(netdev, sk,
 								direction,
 								crypto_info,
 								tcp_sn);
@@ -5894,7 +5909,7 @@ static void cxgb4_ktls_dev_del(struct net_device *netdev,
 	if (chcr_offload_state(adap, CXGB4_TLSDEV_OPS))
 		goto out_unlock;
 
-	adap->uld[CXGB4_ULD_KTLS].tlsdev_ops->tls_dev_del(netdev, tls_ctx,
+	cxgb4_ulds[CXGB4_ULD_KTLS].tlsdev_ops->tls_dev_del(netdev, tls_ctx,
 							  direction);
 
 out_unlock:
@@ -5924,7 +5939,7 @@ static int cxgb4_xfrm_add_state(struct xfrm_state *x,
 	if (ret)
 		goto out_unlock;
 
-       ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_add(x, extack);
+       ret = cxgb4_ulds[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_add(x, extack);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -5944,7 +5959,7 @@ static void cxgb4_xfrm_del_state(struct xfrm_state *x)
 	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
 		goto out_unlock;
 
-	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_delete(x);
+	cxgb4_ulds[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_delete(x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -5962,7 +5977,7 @@ static void cxgb4_xfrm_free_state(struct xfrm_state *x)
 	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
 		goto out_unlock;
 
-	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_free(x);
+	cxgb4_ulds[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_free(x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -5981,7 +5996,7 @@ static bool cxgb4_ipsec_offload_ok(struct sk_buff *skb, struct xfrm_state *x)
 	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
 		goto out_unlock;
 
-	ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_offload_ok(skb, x);
+	ret = cxgb4_ulds[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_offload_ok(skb, x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -6000,7 +6015,7 @@ static void cxgb4_advance_esn_state(struct xfrm_state *x)
 	if (chcr_offload_state(adap, CXGB4_XFRMDEV_OPS))
 		goto out_unlock;
 
-	adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_advance_esn(x);
+	cxgb4_ulds[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_advance_esn(x);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -6544,9 +6559,9 @@ void cxgb4_adap_shutdown(struct adapter *adapter)
 		cxgb4_mqprio_stop_offload(adapter);
 		rtnl_unlock();
 
-		if (is_uld(adapter)) {
+		if (cxgb4_uld_supported_any(adapter)) {
 			detach_ulds(adapter);
-			t4_uld_clean_up(adapter);
+			cxgb4_uld_queues_cleanup(adapter);
 		}
 
 		disable_interrupts(adapter);

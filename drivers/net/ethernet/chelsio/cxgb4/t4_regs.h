@@ -423,6 +423,17 @@
 #define TSVAL_G(x) (((x) >> TSVAL_S) & TSVAL_M)
 
 #define SGE_DBFIFO_STATUS_A 0x10a4
+
+#define LP_INT_THRESH_S    12
+#define LP_INT_THRESH_M    0xfU
+#define LP_INT_THRESH_V(x) ((x) << LP_INT_THRESH_S)
+#define LP_INT_THRESH_G(x) (((x) >> LP_INT_THRESH_S) & LP_INT_THRESH_M)
+
+#define LP_INT_THRESH_T5_S    18
+#define LP_INT_THRESH_T5_M    0xfffU
+#define LP_INT_THRESH_T5_V(x) ((x) << LP_INT_THRESH_T5_S)
+#define LP_INT_THRESH_T5_G(x) (((x) >> LP_INT_THRESH_T5_S) & LP_INT_THRESH_T5_M)
+
 #define SGE_DBVFIFO_SIZE_A 0x113c
 
 #define HP_INT_THRESH_S    28

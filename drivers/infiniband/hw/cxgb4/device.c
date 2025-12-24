@@ -1375,7 +1375,7 @@ static void recover_lost_dbs(struct uld_ctx *ctx, struct qp_list *qp_list)
 
 		xa_lock_irq(&qp->rhp->qps);
 		spin_lock(&qp->lock);
-		ret = cxgb4_sync_txq_pidx(qp->rhp->rdev.lldi.ports[0],
+		ret = cxgb4_uld_txq_sync_pidx(qp->rhp->rdev.lldi.ports[0],
 					  qp->wq.sq.qid,
 					  t4_sq_host_wq_pidx(&qp->wq),
 					  t4_sq_wq_size(&qp->wq));
@@ -1388,7 +1388,7 @@ static void recover_lost_dbs(struct uld_ctx *ctx, struct qp_list *qp_list)
 		}
 		qp->wq.sq.wq_pidx_inc = 0;
 
-		ret = cxgb4_sync_txq_pidx(qp->rhp->rdev.lldi.ports[0],
+		ret = cxgb4_uld_txq_sync_pidx(qp->rhp->rdev.lldi.ports[0],
 					  qp->wq.rq.qid,
 					  t4_rq_host_wq_pidx(&qp->wq),
 					  t4_rq_wq_size(&qp->wq));

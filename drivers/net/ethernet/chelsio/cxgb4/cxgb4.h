@@ -118,8 +118,8 @@ extern bool intr_en;
 	 FW_PARAMS_PARAM_Z_V(0))
 
 enum cxgb4_uld_ctrq_index {
-        CXGB4_ULD_CTRLQ_INDEX_TOE = 0,
-        CXGB4_ULD_CTRLQ_INDEX_RDMA = CXGB4_ULD_CTRLQ_INDEX_TOE + NCHAN * MAX_UP_CORES,
+        //CXGB4_ULD_CTRLQ_INDEX_TOE = 0,
+        CXGB4_ULD_CTRLQ_INDEX_RDMA = 0,
         CXGB4_ULD_CTRLQ_INDEX_ISCSI = CXGB4_ULD_CTRLQ_INDEX_RDMA + NCHAN * MAX_UP_CORES,
         CXGB4_ULD_CTRLQ_INDEX_ISCSIT = CXGB4_ULD_CTRLQ_INDEX_ISCSI + NCHAN * MAX_UP_CORES,
         CXGB4_ULD_CTRLQ_INDEX_NVMEH = CXGB4_ULD_CTRLQ_INDEX_ISCSIT + NCHAN * MAX_UP_CORES,
@@ -524,7 +524,7 @@ struct adapter_params {
 	enum chip_type chip;               /* chip code */
 	struct arch_specific_params arch;  /* chip specific params */
 	unsigned int offload;
-	unsigned char crypto;	/* HW capability for crypto */
+	unsigned char crypto;		/* HW capability for crypto */
 	unsigned char ethofld;		/* QoS support */
 
 	unsigned char bypass;
@@ -532,6 +532,7 @@ struct adapter_params {
 
 	unsigned int ofldq_wr_cred;
 	bool ulptx_memwrite_dsgl;          /* use of T5 DSGL allowed */
+	bool dev_512sgl_mr;		   /* support 512 pbl entries per FR MR*/
 
 	unsigned int nsched_cls;          /* number of traffic classes */
 	unsigned int max_ordird_qp;       /* Max read depth per RDMA QP */
@@ -672,6 +673,8 @@ enum {
 	MAX_ETH_QSETS = 32,           /* # of Ethernet Tx/Rx queue sets */
 	MAX_OFLD_QSETS = 16,          /* # of offload Tx, iscsi Rx queue sets */
 	MAX_CTRL_QUEUES = CXGB4_ULD_CTRLQ_INDEX_MAX, /* # of ULD control Tx queues */
+	MAX_RDMA_QUEUES = NCHAN,      /* # of streaming RDMA Rx queues */
+	MAX_RDMA_CIQS = 32,           /* # of RDMA concentrator IQs */
 	MAX_CSTOR_USPACE_RXQ = 32,    /* # of CSTOR user space Rx queues */
 };
 
@@ -914,6 +917,11 @@ struct tx_sw_desc {
 	dma_addr_t addr[MAX_SKB_FRAGS + 1]; /* DMA mapped addresses */
 };
 
+enum cxgb4_txq_lb_type {
+        CXGB4_TXQ_LB_TYPE_VXLAN     = (1 << 0),
+        CXGB4_TXQ_LB_TYPE_CRYPTO    = (1 << 1),
+};
+
 struct sge_txq {
 	unsigned int  in_use;       /* # of in-use Tx descriptors */
 	unsigned int  q_type;	    /* Q type Eth/Ctrl/Ofld */
@@ -933,6 +941,7 @@ struct sge_txq {
 	unsigned short db_pidx_inc;
 	void __iomem *bar2_addr;    /* address of BAR2 Queue registers */
 	unsigned int bar2_qid;      /* Queue ID for BAR2 Queue registers */
+	u8 lb_queue_type;           /* for looping back of vxlan packets */
 };
 
 struct sge_eth_txq {                /* state for an SGE Ethernet Tx queue */
@@ -1044,6 +1053,8 @@ struct sge {
 
 	struct sge_eth_txq ethtxq[MAX_ETH_QSETS];
 	struct sge_eth_txq ptptxq;
+	struct sge_ofld_rxq rdmarxq[MAX_RDMA_QUEUES];
+	struct sge_ofld_rxq rdmaciq[MAX_RDMA_CIQS];
 	struct sge_ctrl_txq ctrlq[MAX_CTRL_QUEUES];
 
 	struct sge_eth_rxq ethrxq[MAX_ETH_QSETS];
@@ -1063,10 +1074,13 @@ struct sge {
 	u16 ethqsets;               /* # of active Ethernet queue sets */
 	u16 ethtxq_rover;           /* Tx queue to clean up next */
 	u16 ofldqsets;              /* # of active ofld queue sets */
+	u16 rdmaqs;                 /* # of available RDMA Rx queues */
+	u16 rdmaciqs;               /* # of available RDMA concentrator IQs */
 	u16 nqs_per_uld;	    /* # of Rx queues per ULD */
 	u16 eoqsets;                /* # of ETHOFLD queues */
 	u16 mirrorqsets;            /* # of Mirror queues */
 
+	u16 ofld_rxq[MAX_OFLD_QSETS];
 	u16 timer_val[SGE_NTIMERS];
 	u8 counter_val[SGE_NCOUNTERS];
 	u16 dbqtimer_tick;
@@ -1260,7 +1274,6 @@ struct adapter {
 	unsigned int rawf_cnt;
 	struct smt_data *smt;
 
-	struct cxgb4_uld_info *uld;
 	struct cxgb4_uld uld_inst;
 	void *uld_handle[CXGB4_ULD_TYPE_MAX];
 
@@ -1272,7 +1285,7 @@ struct adapter {
 	struct list_head mps_ref;
 	spinlock_t mps_ref_lock; /* lock for syncing mps ref/def activities */
 
-	struct tid_info tids;               /* TID table */
+	struct cxgb4_tid_info tidinfo; 	/* TID table */
 	void **tid_release_head;
 	spinlock_t tid_release_lock;
 	struct workqueue_struct *workq;
@@ -2423,4 +2436,5 @@ void cxgb4_port_mirror_free(struct net_device *dev);
 #if IS_ENABLED(CONFIG_CHELSIO_TLS_DEVICE)
 int cxgb4_set_ktls_feature(struct adapter *adap, bool enable);
 #endif
+bool cxgb4_pcie_relaxed_ordering_enabled(struct adapter *adap);
 #endif /* __CXGB4_H__ */
