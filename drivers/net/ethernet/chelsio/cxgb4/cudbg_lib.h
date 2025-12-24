@@ -203,7 +203,7 @@ static inline u32 cudbg_uld_rxq_to_qtype(u32 uld)
 		return CUDBG_QTYPE_ISCSIT_RXQ;
 	case CXGB4_ULD_CRYPTO:
 		return CUDBG_QTYPE_CRYPTO_RXQ;
-	case CXGB4_ULD_TLS:
+	case CXGB4_ULD_TYPE_TLS:
 		return CUDBG_QTYPE_TLS_RXQ;
 	}
 
@@ -221,7 +221,7 @@ static inline u32 cudbg_uld_flq_to_qtype(u32 uld)
 		return CUDBG_QTYPE_ISCSIT_FLQ;
 	case CXGB4_ULD_CRYPTO:
 		return CUDBG_QTYPE_CRYPTO_FLQ;
-	case CXGB4_ULD_TLS:
+	case CXGB4_ULD_TYPE_TLS:
 		return CUDBG_QTYPE_TLS_FLQ;
 	}
 

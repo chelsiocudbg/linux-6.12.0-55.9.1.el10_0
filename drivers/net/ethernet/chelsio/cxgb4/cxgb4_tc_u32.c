@@ -173,8 +173,7 @@ int cxgb4_config_knode(struct net_device *dev, struct tc_cls_u32_offload *cls)
 	 * rule. Only insert rule if its prio doesn't conflict with
 	 * existing rules.
 	 */
-	filter_id = cxgb4_get_free_ftid(dev, inet_family, false,
-					TC_U32_NODE(cls->knode.handle));
+	filter_id = CXGB4_FILTER_ID_ANY & 0x0fffffff;
 	if (filter_id < 0) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "No free LETCAM index available");
@@ -334,7 +333,7 @@ int cxgb4_config_knode(struct net_device *dev, struct tc_cls_u32_offload *cls)
 	fs.type = is_ipv6 ? 1 : 0;
 
 	/* Set the filter */
-	ret = cxgb4_set_filter(dev, filter_id, &fs);
+	ret = cxgb4_filter_create(dev, filter_id, &fs, NULL, GFP_KERNEL);
 	if (ret)
 		goto out;
 
@@ -437,7 +436,7 @@ int cxgb4_delete_knode(struct net_device *dev, struct tc_cls_u32_offload *cls)
 			return -EINVAL;
 	}
 
-	ret = cxgb4_del_filter(dev, filter_id, NULL);
+	ret = cxgb4_filter_delete(dev, filter_id, NULL, NULL, GFP_KERNEL);
 	if (ret)
 		goto out;
 
@@ -455,7 +454,7 @@ int cxgb4_delete_knode(struct net_device *dev, struct tc_cls_u32_offload *cls)
 				if (!test_bit(j, link->tid_map))
 					continue;
 
-				ret = __cxgb4_del_filter(dev, j, NULL, NULL);
+				ret = cxgb4_filter_delete(dev, j, NULL, NULL, GFP_KERNEL);
 				if (ret)
 					goto out;
 
