@@ -449,34 +449,10 @@ void c4iw_free_srq_idx(struct c4iw_rdev *rdev, int idx)
 	rdev->stats.srqt.cur--;
 	mutex_unlock(&rdev->stats.lock);
 }
-
 /*
  * On-Chip QP Memory.
  */
-#define MIN_OCQP_SHIFT 12	/* 4KB == min ocqp size */
-
-u32 c4iw_ocqp_pool_alloc(struct c4iw_rdev *rdev, int size)
-{
-	unsigned long addr = gen_pool_alloc(rdev->ocqp_pool, size);
-	pr_debug("addr 0x%x size %d\n", (u32)addr, size);
-	if (addr) {
-		mutex_lock(&rdev->stats.lock);
-		rdev->stats.ocqp.cur += roundup(size, 1 << MIN_OCQP_SHIFT);
-		if (rdev->stats.ocqp.cur > rdev->stats.ocqp.max)
-			rdev->stats.ocqp.max = rdev->stats.ocqp.cur;
-		mutex_unlock(&rdev->stats.lock);
-	}
-	return (u32)addr;
-}
-
-void c4iw_ocqp_pool_free(struct c4iw_rdev *rdev, u32 addr, int size)
-{
-	pr_debug("addr 0x%x size %d\n", addr, size);
-	mutex_lock(&rdev->stats.lock);
-	rdev->stats.ocqp.cur -= roundup(size, 1 << MIN_OCQP_SHIFT);
-	mutex_unlock(&rdev->stats.lock);
-	gen_pool_free(rdev->ocqp_pool, (unsigned long)addr, size);
-}
+#define MIN_OCQP_SHIFT 12      /* 4KB == min ocqp size */
 
 int c4iw_ocqp_pool_create(struct c4iw_rdev *rdev)
 {

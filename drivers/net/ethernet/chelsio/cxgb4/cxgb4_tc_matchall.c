@@ -322,7 +322,7 @@ static int cxgb4_matchall_add_filter(struct net_device *dev,
 	fs = &tc_port_matchall->ingress.fs[filter_type];
 	memset(fs, 0, sizeof(*fs));
 
-	if (fidx < adap->tids.nhpftids)
+	if (fidx < adap->tidinfo.hpftids.size)
 		fs->prio = 1;
 	fs->tc_prio = cls->common.prio;
 	fs->tc_cookie = cls->cookie;

@@ -250,6 +250,8 @@ enum cudbg_le_entry_types {
 	LE_ET_TCAM_ROUTING = 5,
 	LE_ET_HASH_CON = 6,
 	LE_ET_INVALID_TID = 8,
+	/* Reserve for future regions */
+	LE_ET_TCAM_MAX = 16,
 };
 
 struct cudbg_tcam {
@@ -348,5 +350,70 @@ struct cudbg_qdesc_info {
 #define IREG_NUM_ELEM 4
 
 #define CUDBG_NUM_PCIE_CONFIG_REGS 0x61
+
+struct tid_info_region {
+        u32 ntids;
+        u32 nstids;
+        u32 stid_base;
+        u32 hash_base;
+
+        u32 natids;
+        u32 nftids;
+        u32 ftid_base;
+        u32 aftid_base;
+        u32 aftid_end;
+
+        /* Server filter region */
+        u32 sftid_base;
+        u32 nsftids;
+
+        /* UO context range */
+        u32 uotid_base;
+        u32 nuotids;
+
+        u32 sb;
+        u32 flags;
+        u32 le_db_conf;
+        u32 IP_users;
+        u32 IPv6_users;
+
+        u32 hpftid_base;
+        u32 nhpftids;
+};
+
+struct cudbg_letcam_region {
+        u8 type;
+        u32 start;
+        u32 nentries;
+
+        u8 reserved[64];
+};
+
+
+struct cudbg_letcam {
+        struct cudbg_ver_hdr ver_hdr;
+
+        u8 nregions;
+        u32 region_hdr_size;
+
+        u32 max_tid;
+        u32 tid_data_hdr_size;
+
+        u8 reserved[64];
+};
+
+
+struct tid_info_region_rev1 {
+        struct cudbg_ver_hdr ver_hdr;
+        struct tid_info_region tid;
+        u32 tid_start;
+        u32 nhash;
+        u32 clip_base;
+        u32 nclip;
+        u32 route_base;
+        u32 nroute;
+        u32 reserved[11];
+};
+
 
 #endif /* __CUDBG_ENTITY_H__ */

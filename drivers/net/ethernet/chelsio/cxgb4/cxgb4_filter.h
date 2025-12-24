@@ -38,11 +38,6 @@
 #define CXGB4_FILTER_ID_ANY UINT_MAX
 
 struct ch_filter_specification;
-#if 0
-// ------------ __SS__ commenting for now -----------
-extern int user_filter_perc;
-#endif
-
 struct filter_ehash_bucket {
        struct hlist_nulls_head chain;
 };

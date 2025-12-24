@@ -178,6 +178,51 @@ static const u32 t6_hma_ireg_array[][IREG_NUM_ELEM] = {
 	{0x51320, 0x51324, 0xa000, 32} /* t6_hma_regs_a000_to_a01f */
 };
 
+#define GET_SCRATCH_BUFF(dbg_buff, size, scratch_buff) \
+do { \
+        rc = get_scratch_buff(dbg_buff, size, scratch_buff); \
+        if (rc) \
+                return rc; \
+} while (0)
+
+ #define WRITE_AND_COMPRESS_SCRATCH_BUFF(scratch_buff, dbg_buff) \
+ do { \
+         struct cudbg_hdr *cudbg_hdr; \
+                 cudbg_hdr = (struct cudbg_hdr *)(dbg_buff->data); \
+         if (cudbg_hdr->compress_type == CUDBG_COMPRESSION_NONE) { \
+                 rc = write_to_buf(pdbg_init, dbg_buff->data, dbg_buff->size, \
+                                   &dbg_buff->offset, (scratch_buff)->data, \
+                                   (scratch_buff)->size); \
+         } else if (cudbg_hdr->compress_type == CUDBG_COMPRESSION_ZLIB){ \
+                 rc = cudbg_compress_zlib(pdbg_init, scratch_buff, dbg_buff); \
+         } else { \
+                 rc = write_compression_hdr(pdbg_init, scratch_buff, dbg_buff); \
+                 if (rc) \
+                         goto err1; \
+                 rc = compress_buff(pdbg_init, scratch_buff, dbg_buff); \
+         } \
+ } while (0)
+
+ #define WRITE_AND_RELEASE_SCRATCH_BUFF(scratch_buff, dbg_buff) \
+ do { \
+         WRITE_AND_COMPRESS_SCRATCH_BUFF(scratch_buff, dbg_buff); \
+ err1: \
+         release_scratch_buff(scratch_buff, dbg_buff); \
+ } while (0)
+
+
+static int cudbg_query_params(struct cudbg_init *cudbg, unsigned int mbox,
+                              unsigned int pf, unsigned int vf, unsigned int nparams,
+                              const u32 *params, u32 *val)
+{
+        int rc;
+
+        // cudbg_access_lock_aquire(cudbg);
+        rc = t4_query_params(cudbg->adap, mbox, pf, vf, nparams, params, val);
+        //cudbg_access_lock_release(cudbg);
+        return rc;
+}
+
 u32 cudbg_get_entity_length(struct adapter *adap, u32 entity)
 {
 	struct cudbg_tcam tcam_region = { 0 };
@@ -2118,97 +2163,166 @@ int cudbg_collect_pm_indirect(struct cudbg_init *pdbg_init,
 	return cudbg_write_and_release_buff(pdbg_init, &temp_buff, dbg_buff);
 }
 
-int cudbg_collect_tid(struct cudbg_init *pdbg_init,
-		      struct cudbg_buffer *dbg_buff,
-		      struct cudbg_error *cudbg_err)
+static int calculate_max_tids(struct cudbg_init *pdbg_init)
 {
+        struct adapter *padap = pdbg_init->adap;
+        u32 max_tids, value, hash_base;
+
+        /* Check whether hash is enabled and calculate the max tids */
+        value = t4_read_reg(padap, LE_DB_CONFIG_A);
+        if ((value >> HASHEN_S) & 1) {
+                value = t4_read_reg(padap, LE_DB_HASH_CONFIG_A);
+                if (CHELSIO_CHIP_VERSION(padap->params.chip) > CHELSIO_T5) {
+                        hash_base = t4_read_reg(padap,
+                                                T6_LE_DB_HASH_TID_BASE_A);
+                        max_tids = (value & 0xFFFFF) + hash_base;
+                } else {
+                        hash_base = t4_read_reg(padap, LE_DB_TID_HASHBASE_A);
+                        max_tids = (1 << HASHTIDSIZE_G(value)) +
+                                   (hash_base >> 2);
+                }
+        } else {
+                if (CHELSIO_CHIP_VERSION(padap->params.chip) > CHELSIO_T5) {
+                        value = t4_read_reg(padap, LE_DB_CONFIG_A);
+                        max_tids = (value & ASLIPCOMPEN_F) ?
+                                   CUDBG_MAX_TID_COMP_EN :
+                                   CUDBG_MAX_TID_COMP_DIS;
+                } else {
+                        max_tids = CUDBG_MAX_TCAM_TID;
+                }
+        }
+
+        if (CHELSIO_CHIP_VERSION(padap->params.chip) > CHELSIO_T5)
+                max_tids += CUDBG_T6_CLIP;
+
+        return max_tids;
+}
+
+
+int cudbg_collect_tid(struct cudbg_init *pdbg_init,
+                      struct cudbg_buffer *dbg_buff,
+                      struct cudbg_error *cudbg_err)
+{
+	struct cudbg_letcam_region *le_region = NULL, *tmp_region;
+	struct cudbg_buffer scratch_buff, region_buff;
 	struct adapter *padap = pdbg_init->adap;
-	struct cudbg_tid_info_region_rev1 *tid1;
-	struct cudbg_buffer temp_buff = { 0 };
-	struct cudbg_tid_info_region *tid;
-	u32 para[2], val[2];
+	struct cudbg_letcam letcam = {{ 0 }};
+	struct tid_info_region_rev1 *tid1;
+	struct tid_info_region *tid;
+	u32 para[2], val[2], pf;
 	int rc;
+	u8 i;
 
-	rc = cudbg_get_buff(pdbg_init, dbg_buff,
-			    sizeof(struct cudbg_tid_info_region_rev1),
-			    &temp_buff);
-	if (rc)
-		return rc;
+	GET_SCRATCH_BUFF(dbg_buff, sizeof(*tid1), &scratch_buff);
 
-	tid1 = (struct cudbg_tid_info_region_rev1 *)temp_buff.data;
-	tid = &tid1->tid;
-	tid1->ver_hdr.signature = CUDBG_ENTITY_SIGNATURE;
-	tid1->ver_hdr.revision = CUDBG_TID_INFO_REV;
-	tid1->ver_hdr.size = sizeof(struct cudbg_tid_info_region_rev1) -
-			     sizeof(struct cudbg_ver_hdr);
-
-	/* If firmware is not attached/alive, use backdoor register
-	 * access to collect dump.
-	 */
-	if (!is_fw_attached(pdbg_init))
-		goto fill_tid;
-
+#define FW_PARAM_DEV_A(param) \
+	(FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DEV) | \
+	 FW_PARAMS_PARAM_X_V(FW_PARAMS_PARAM_DEV_##param))
 #define FW_PARAM_PFVF_A(param) \
 	(FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_PFVF) | \
 	 FW_PARAMS_PARAM_X_V(FW_PARAMS_PARAM_PFVF_##param) | \
 	 FW_PARAMS_PARAM_Y_V(0) | \
 	 FW_PARAMS_PARAM_Z_V(0))
+#define MAX_ATIDS_A 8192U
 
+	tid1 = (struct tid_info_region_rev1 *)scratch_buff.data;
+	tid = &(tid1->tid);
+	tid1->ver_hdr.signature = CUDBG_ENTITY_SIGNATURE;
+	tid1->ver_hdr.revision = CUDBG_TID_INFO_REV;
+	tid1->ver_hdr.size = sizeof(struct tid_info_region_rev1) -
+		sizeof(struct cudbg_ver_hdr);
+
+	tid->le_db_conf = t4_read_reg(padap, LE_DB_CONFIG_A);
+
+	letcam.max_tid = calculate_max_tids(pdbg_init);
+	tid->ntids = letcam.max_tid;
+	if (CHELSIO_CHIP_VERSION(padap->params.chip) > CHELSIO_T5)
+		tid->ntids -= CUDBG_T6_CLIP;
+
+	/* Fill ATIDS */
+	tid->natids = min(tid->ntids / 2, MAX_ATIDS_A);
+	letcam.region_hdr_size = sizeof(struct cudbg_letcam_region);
+	letcam.tid_data_hdr_size = sizeof(struct cudbg_tid_data);
+
+	region_buff.size = LE_ET_TCAM_MAX * letcam.region_hdr_size;
+	GET_SCRATCH_BUFF(dbg_buff, CUDBG_CHUNK_SIZE, &region_buff);
+	le_region = (struct cudbg_letcam_region *)(region_buff.data);
+	letcam.nregions = 0; // cudbg_letcam_get_regions(pdbg_init, &letcam, le_region);
+
+	/* Update tid regions range */
+	tmp_region = le_region;
+	for (i = 0; i < LE_ET_TCAM_MAX; i++) {
+		switch (tmp_region->type) {
+
+			case LE_ET_TCAM_CON:
+				tid->aftid_base = tmp_region->start;
+				tid->aftid_end = tmp_region->nentries;
+				break;
+
+			case LE_ET_TCAM_SERVER:
+				tid->stid_base = tmp_region->start;
+				tid->nstids = tmp_region->nentries;
+				break;
+
+			case LE_ET_TCAM_FILTER:
+				tid->ftid_base = tmp_region->start;
+				tid->nftids = tmp_region->nentries;
+				break;
+
+			case LE_ET_TCAM_CLIP:
+				tid1->clip_base = tmp_region->start;
+				tid1->nclip = tmp_region->nentries;
+				break;
+
+			case LE_ET_TCAM_ROUTING:
+				tid1->route_base = tmp_region->start;
+				tid1->nroute = tmp_region->nentries;
+				break;
+
+			case LE_ET_HASH_CON:
+				tid->hash_base = tmp_region->start;
+				tid1->nhash = tmp_region->nentries;
+				break;
+		}
+		tmp_region = (struct cudbg_letcam_region *)
+			(((u8 *)tmp_region) +
+			 letcam.region_hdr_size);
+	}
+
+	/* Free up region_buff */
+	release_scratch_buff(&region_buff, dbg_buff);
+
+	/*UO context range*/
 	para[0] = FW_PARAM_PFVF_A(ETHOFLD_START);
 	para[1] = FW_PARAM_PFVF_A(ETHOFLD_END);
-	rc = t4_query_params(padap, padap->mbox, padap->pf, 0, 2, para, val);
-	if (rc <  0) {
-		cudbg_err->sys_err = rc;
-		cudbg_put_buff(pdbg_init, &temp_buff);
-		return rc;
-	}
-	tid->uotid_base = val[0];
-	tid->nuotids = val[1] - val[0] + 1;
 
-	if (is_t5(padap->params.chip)) {
-		tid->sb = t4_read_reg(padap, LE_DB_SERVER_INDEX_A) / 4;
-	} else if (is_t6(padap->params.chip)) {
-		tid1->tid_start =
-			t4_read_reg(padap, LE_DB_ACTIVE_TABLE_START_INDEX_A);
-		tid->sb = t4_read_reg(padap, LE_DB_SRVR_START_INDEX_A);
+	for (pf = 0; pf <= PCIE_FW_MASTER_M; pf++) {
+		rc = cudbg_query_params(pdbg_init, padap->mbox, pf, 0, 2, para,
+				val);
+		if (rc || !val[0] || !val[1])
+			continue;
 
-		para[0] = FW_PARAM_PFVF_A(HPFILTER_START);
-		para[1] = FW_PARAM_PFVF_A(HPFILTER_END);
-		rc = t4_query_params(padap, padap->mbox, padap->pf, 0, 2,
-				     para, val);
-		if (rc < 0) {
-			cudbg_err->sys_err = rc;
-			cudbg_put_buff(pdbg_init, &temp_buff);
-			return rc;
-		}
-		tid->hpftid_base = val[0];
-		tid->nhpftids = val[1] - val[0] + 1;
+		if (!tid->nuotids)
+			tid->uotid_base = val[0];
+		else
+			tid->uotid_base = min(tid->uotid_base, val[0]);
+
+		tid->nuotids += val[1] - val[0] + 1;
 	}
+
+	tid->IP_users = t4_read_reg(padap, LE_DB_ACT_CNT_IPV4_A);
+	tid->IPv6_users = t4_read_reg(padap, LE_DB_ACT_CNT_IPV6_A);
 
 #undef FW_PARAM_PFVF_A
+#undef FW_PARAM_DEV_A
+#undef MAX_ATIDS_A
 
-fill_tid:
-	tid->ntids = padap->tids.ntids;
-	tid->nstids = padap->tids.nstids;
-	tid->stid_base = padap->tids.stid_base;
-	tid->hash_base = padap->tids.hash_base;
-
-	tid->natids = padap->tids.natids;
-	tid->nftids = padap->tids.nftids;
-	tid->ftid_base = padap->tids.ftid_base;
-	tid->aftid_base = padap->tids.aftid_base;
-	tid->aftid_end = padap->tids.aftid_base;
-
-	tid->sftid_base = padap->tids.sftid_base;
-	tid->nsftids = padap->tids.nsftids;
-
-	tid->flags = padap->flags;
-	tid->le_db_conf = t4_read_reg(padap, LE_DB_CONFIG_A);
-	tid->ip_users = t4_read_reg(padap, LE_DB_ACT_CNT_IPV4_A);
-	tid->ipv6_users = t4_read_reg(padap, LE_DB_ACT_CNT_IPV6_A);
-
-	return cudbg_write_and_release_buff(pdbg_init, &temp_buff, dbg_buff);
+	//WRITE_AND_COMPRESS_SCRATCH_BUFF(&scratch_buff, dbg_buff);
+//err1:
+	release_scratch_buff(&scratch_buff, dbg_buff);
+	return rc;
 }
+
 
 int cudbg_collect_pcie_config(struct cudbg_init *pdbg_init,
 			      struct cudbg_buffer *dbg_buff,

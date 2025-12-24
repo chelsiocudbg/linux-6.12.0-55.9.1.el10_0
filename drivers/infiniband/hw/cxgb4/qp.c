@@ -91,12 +91,6 @@ static void set_state(struct c4iw_qp *qhp, enum c4iw_qp_state state)
 	qhp->attr.state = state;
 	spin_unlock_irqrestore(&qhp->lock, flag);
 }
-
-static void dealloc_oc_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
-{
-	c4iw_ocqp_pool_free(rdev, sq->dma_addr, sq->memsize);
-}
-
 static void dealloc_host_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
 {
 	dma_free_coherent(&(rdev->lldi.pdev->dev), sq->memsize, sq->queue,
@@ -105,25 +99,7 @@ static void dealloc_host_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
 
 static void dealloc_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
 {
-	if (t4_sq_onchip(sq))
-		dealloc_oc_sq(rdev, sq);
-	else
 		dealloc_host_sq(rdev, sq);
-}
-
-static int alloc_oc_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
-{
-	if (!ocqp_support || !ocqp_supported(&rdev->lldi))
-		return -ENOSYS;
-	sq->dma_addr = c4iw_ocqp_pool_alloc(rdev, sq->memsize);
-	if (!sq->dma_addr)
-		return -ENOMEM;
-	sq->phys_addr = rdev->oc_mw_pa + sq->dma_addr -
-			rdev->lldi.vr->ocq.start;
-	sq->queue = (__force union t4_wr *)(rdev->oc_mw_kva + sq->dma_addr -
-					    rdev->lldi.vr->ocq.start);
-	sq->flags |= T4_SQ_ONCHIP;
-	return 0;
 }
 
 static int alloc_host_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
@@ -140,8 +116,6 @@ static int alloc_host_sq(struct c4iw_rdev *rdev, struct t4_sq *sq)
 static int alloc_sq(struct c4iw_rdev *rdev, struct t4_sq *sq, int user)
 {
 	int ret = -ENOSYS;
-	if (user)
-		ret = alloc_oc_sq(rdev, sq);
 	if (ret)
 		ret = alloc_host_sq(rdev, sq);
 	return ret;
@@ -1571,7 +1545,7 @@ static void post_terminate(struct c4iw_qp *qhp, struct t4_cqe *err_cqe,
 	if (WARN_ON(!skb))
 		return;
 
-	set_wr_txq(skb, CPL_PRIORITY_DATA, qhp->ep->txq_idx);
+	set_wr_txq(skb, CPL_PRIORITY_DATA, qhp->ep->com.txq_idx);
 
 	wqe = __skb_put_zero(skb, sizeof(*wqe));
 	wqe->op_compl = cpu_to_be32(FW_WR_OP_V(FW_RI_INIT_WR));
@@ -1702,7 +1676,7 @@ static int rdma_fini(struct c4iw_dev *rhp, struct c4iw_qp *qhp,
 	if (WARN_ON(!skb))
 		return -ENOMEM;
 
-	set_wr_txq(skb, CPL_PRIORITY_DATA, ep->txq_idx);
+	set_wr_txq(skb, CPL_PRIORITY_DATA, ep->com.txq_idx);
 
 	wqe = __skb_put_zero(skb, sizeof(*wqe));
 	wqe->op_compl = cpu_to_be32(
@@ -1766,7 +1740,7 @@ static int rdma_init(struct c4iw_dev *rhp, struct c4iw_qp *qhp)
 		kfree_skb(skb);
 		goto out;
 	}
-	set_wr_txq(skb, CPL_PRIORITY_DATA, qhp->ep->txq_idx);
+	set_wr_txq(skb, CPL_PRIORITY_DATA, qhp->ep->com.txq_idx);
 
 	wqe = __skb_put_zero(skb, sizeof(*wqe));
 	wqe->op_compl = cpu_to_be32(
@@ -2749,7 +2723,7 @@ int c4iw_create_srq(struct ib_srq *ib_srq, struct ib_srq_init_attr *attrs,
 		goto err_free_skb;
 	attrs->attr.max_wr = rqsize - 1;
 
-	if (CHELSIO_CHIP_VERSION(rhp->rdev.lldi.adapter_type) > CHELSIO_T6)
+	if (CHELSIO_CHIP_VERSION(rhp->rdev.lldi.adapter_type) >= CHELSIO_T7)
 		srq->flags = T4_SRQ_LIMIT_SUPPORT;
 
 	if (udata) {

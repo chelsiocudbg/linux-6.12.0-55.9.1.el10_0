@@ -47,9 +47,10 @@
 
 unsigned int cxgb4_filter_num_tids(struct adapter *adap)
 {
-	struct tid_info *t = &adap->tids;
+	struct cxgb4_tid_info *t = &adap->tidinfo;
 
-	return t->nhpftids + t->nftids + t->nhash;
+	return t->hpftids.size + t->ftids.size + t->hashtids.size +
+		t->hashcoll_tids.size;
 }
 
 /* Validate filter spec against configuration done on the card. */
@@ -365,14 +366,14 @@ static void cxgb4_atid_filter_clear(struct adapter *adap,
 static void cxgb4_hashtid_filter_clear(struct adapter *adap,
                                        struct filter_entry *f)
 {
-        spinlock_t *lock = 0;
+        spinlock_t *lock = 0; /*Lock for accessing ehash table */
 
         cxgb4_hashtid_remove(adap, 0, f->tid, f->fs.type);
 
         spin_lock_bh(lock);
         f->valid = 0;
         /* Remove hash entry */
-        hlist_nulls_del_init_rcu(&f->filter_nulls_node);
+//        hlist_nulls_del_init_rcu(&f->filter_nulls_node);
         spin_unlock_bh(lock);
 
         cxgb4_filter_clear(adap, f);
@@ -412,6 +413,7 @@ static int cxgb4_filter_normal_create_wr(struct adapter *adapter,
         struct fw_filter2_wr *fwr;
         struct sk_buff *skb;
         u32 chip_ver;
+	u16 ctrlq_index;
 
         if (gfp_mask & GFP_ATOMIC) {
                 skb = alloc_skb(sizeof(*fwr), GFP_ATOMIC);
@@ -526,8 +528,9 @@ static int cxgb4_filter_normal_create_wr(struct adapter *adapter,
          * When we get the Work Request Reply we'll clear the pending status.
          */
         f->pending = 1;
-
-        set_wr_txq(skb, CPL_PRIORITY_CONTROL, f->fs.val.iport & 0x3);
+	ctrlq_index = f->fs.val.iport * adapter->params.num_up_cores;
+	cxgb4_uld_tid_ctrlq_id_sel_update(f->dev, f->tid, &ctrlq_index);
+	set_wr_txq(skb, CPL_PRIORITY_CONTROL, ctrlq_index);
         cxgb4_sge_xmit_ctrl(f->dev, skb);
         return 0;
 }
@@ -542,7 +545,7 @@ int cxgb4_filter_normal_create(struct net_device *dev, u32 filter_id,
 {
         struct adapter *adapter = netdev2adap(dev);
         unsigned int fidx, chip_ver;
-        struct tid_info *t;
+        struct cxgb4_tid_info *t;
         struct filter_entry *f;
         int iq, ret;
         u8 n = 1;
@@ -552,7 +555,7 @@ int cxgb4_filter_normal_create(struct net_device *dev, u32 filter_id,
                 return iq;
 
         chip_ver = CHELSIO_CHIP_VERSION(adapter->params.chip);
-        t = &adapter->tids;
+        t = &adapter->tidinfo;
 
         /* IPv6 filters occupy four slots on T5 and two slots on T6
          * and must be aligned on four-slot/two-slot boundaries. IPv4
@@ -563,15 +566,15 @@ int cxgb4_filter_normal_create(struct net_device *dev, u32 filter_id,
         if (fidx != CXGB4_FILTER_ID_ANY) {
                 if (chip_ver > CHELSIO_T5 && fs->prio) {
                         if (fs->type)
-                                n = 2;
+                                n = t->hpftids.max_range;
 
                         fidx &= ~(n - 1);
                         if (cxgb4_hpftid_out_of_range(adapter, fidx)) {
                                 dev_err(adapter->pdev_dev,
                                         "Filter ID %u is out of HPFilter ID range (%u, %u)\n",
-                                        filter_id, t->hpftid_base,
-                                        t->hpftid_base + t->nhpftids - 1);
-                                return -ERANGE;
+					filter_id, t->hpftids.start,
+					t->hpftids.start + t->hpftids.size - 1);
+				return -ERANGE;
                         }
                 } else {
                         if (!cxgb4_sftid_out_of_range(adapter, fidx)) {
@@ -582,14 +585,14 @@ int cxgb4_filter_normal_create(struct net_device *dev, u32 filter_id,
                         }
 
                         if (fs->type)
-                                n = chip_ver > CHELSIO_T5 ? 2 : 4;
+                                n = t->ftids.max_range;
 
                         fidx &= ~(n - 1);
                         if (cxgb4_ftid_out_of_range(adapter, fidx)) {
                                 dev_err(adapter->pdev_dev,
                                         "Filter ID %u is out of Filter ID range (%u, %u)\n",
-                                        filter_id, t->ftid_base,
-                                        t->ftid_base + t->nftids - 1);
+					filter_id, t->ftids.start,
+					t->ftids.start + t->ftids.size - 1);
                                 return -ERANGE;
                         }
                 }
@@ -693,14 +696,14 @@ static int cxgb4_filter_normal_delete(struct net_device *dev, u32 filter_id,
 {
         struct adapter *adapter = netdev2adap(dev);
         unsigned int fidx, chip_ver;
-        struct tid_info *t;
+        struct cxgb4_tid_info *t;
         struct filter_entry *f;
         int ret;
 
         chip_ver = CHELSIO_CHIP_VERSION(adapter->params.chip);
         /* Make sure this is a valid filter and that we can delete it.
          */
-        t = &adapter->tids;
+        t = &adapter->tidinfo;
         fidx = filter_id;
         if (cxgb4_hpftid_out_of_range(adapter, fidx)) {
                 if (!cxgb4_sftid_out_of_range(adapter, fidx)) {
@@ -713,8 +716,8 @@ static int cxgb4_filter_normal_delete(struct net_device *dev, u32 filter_id,
                 if (cxgb4_ftid_out_of_range(adapter, fidx)) {
                         dev_err(adapter->pdev_dev,
                                 "Filter ID %u is out of Filter ID range (%u, %u)\n",
-                                filter_id, t->ftid_base,
-                                t->ftid_base + t->nftids - 1);
+				filter_id, t->ftids.start,
+				t->ftids.start + t->ftids.size - 1);
                         return -ERANGE;
                 }
         }
@@ -1249,8 +1252,9 @@ static int cxgb4_filter_hash_delete(struct net_device *dev, u32 filter_id,
         u16 ctrlq_index;
 
         CH_MSG(adapter, INFO, HW, "%s: filter_id = %d ; nhashtids = %d\n",
-               __func__, filter_id,
-               adapter->tids.nhash);
+			__func__, filter_id,
+			adapter->tidinfo.hashcoll_tids.size +
+			adapter->tidinfo.hashtids.size);
 
         if (unlikely(cxgb4_hashtid_out_of_range(adapter, filter_id))) {
                 CH_ERR(adapter, "%s: hash filter TID %u out of range\n",
@@ -1736,14 +1740,14 @@ int cxgb4_filter_delete(struct net_device *dev, u32 filter_id,
 
 void cxgb4_filter_clear_all(struct adapter *adapter)
 {
-        struct tid_info *t = &adapter->tids;
+        struct cxgb4_tid_info *t = &adapter->tidinfo;
         struct filter_entry *f;
         u8 type, chip_ver;
         unsigned int i;
 
         chip_ver = CHELSIO_CHIP_VERSION(adapter->params.chip);
-        if (t->nhpftids) {
-                i = t->hpftid_base;
+	if (t->hpftids.size) {
+		i = t->hpftids.start;
                 while (!cxgb4_hpftid_out_of_range(adapter, i)) {
                         type = 0;
                         f = cxgb4_ftid_lookup(adapter, i);
@@ -1752,13 +1756,13 @@ void cxgb4_filter_clear_all(struct adapter *adapter)
                                 cxgb4_filter_normal_delete(f->dev, f->tid, NULL,
                                                            GFP_KERNEL);
                         }
-                        i += type ? 2 : 1;
+			i += type ? t->hpftids.max_range : 1;
                 }
         }
 
-        if (t->nftids) {
-                i = t->ftid_base;
-                while (!cxgb4_ftid_out_of_range(adapter, i)) {
+	if (t->ftids.size) {
+		i = t->ftids.start;
+		while (!cxgb4_ftid_out_of_range(adapter, i)) {
                         type = 0;
                         f = cxgb4_ftid_lookup(adapter, i);
                         if (f && (f->valid || f->pending)) {
@@ -1766,13 +1770,12 @@ void cxgb4_filter_clear_all(struct adapter *adapter)
                                 cxgb4_filter_normal_delete(f->dev, f->tid, NULL,
                                                            GFP_KERNEL);
                         }
-                        i += type ? (chip_ver > CHELSIO_T5 ? 2 : 4) : 1;
+                        i += type ? t->ftids.max_range : 1;
                 }
         }
 
-        if (is_hashfilter(adapter) && t->nhash) {
-
-                i = t->hash_base;
+	if (is_hashfilter(adapter) && t->hashtids.size) {
+		i = t->hashcoll_tids.start;
                 while (!cxgb4_hashtid_out_of_range(adapter, i)) {
                         type = 0;
                         f = cxgb4_hashtid_lookup(adapter, i);
@@ -1781,14 +1784,20 @@ void cxgb4_filter_clear_all(struct adapter *adapter)
                                 cxgb4_filter_hash_delete(f->dev, f->tid, NULL,
                                                          GFP_KERNEL);
                         }
+                        i += type ? t->hashcoll_tids.max_range : 1;
+                }
 
-			u8 ipv6_max_range = 2;
-			u32 lconfig = t4_read_reg(adapter, LE_DB_CONFIG_A);
+		i = t->hashtids.start;
+                while (!cxgb4_hashtid_out_of_range(adapter, i)) {
+                        type = 0;
+                        f = cxgb4_hashtid_lookup(adapter, i);
+                        if (f && (f->valid || f->pending)) {
+                                type = f->fs.type;
+                                cxgb4_filter_hash_delete(f->dev, f->tid, NULL,
+                                                         GFP_KERNEL);
+                        }
+                        i += type ? t->hashtids.max_range : 1;
 
-			if (chip_ver > CHELSIO_T6 && lconfig & HASHEN_F)
-				ipv6_max_range = 1;
-
-			i += type ? ipv6_max_range : 1;
 		}
 	}
 }
@@ -1972,7 +1981,7 @@ int cxgb4_hash_filter_config_verify(struct adapter *adap, bool offload_caps)
 
 int cxgb4_hash_filter_init(struct adapter *adap)
 {
-        unsigned int hash_size = adap->tids.nhash;
+	unsigned int hash_size = adap->tidinfo.hashtids.size;
 
         if (!hash_size)
                 return 0;
@@ -2114,23 +2123,6 @@ int cxgb4_uld_server_filter_remove(const struct net_device *dev, u32 stid)
         return ret;
 }
 EXPORT_SYMBOL(cxgb4_uld_server_filter_remove);
-
-int cxgb4_create_server_filter(const struct net_device *dev, unsigned int stid,
-               __be32 sip, __be16 sport, __be16 vlan,
-               unsigned int queue, unsigned char port, unsigned char mask)
-{
-	return cxgb4_uld_server_filter_insert(dev, stid, sip, sport, vlan, queue, port, mask);
-
-}
-EXPORT_SYMBOL(cxgb4_create_server_filter);
-
-int cxgb4_remove_server_filter(const struct net_device *dev, unsigned int stid,
-               unsigned int queue, bool ipv6)
-{
-	return cxgb4_uld_server_filter_remove(dev, stid);
-}
-EXPORT_SYMBOL(cxgb4_remove_server_filter);
-
 
 /**
  *      cxgb4_uld_create_filter_info - return Compressed Filter Value/Mask tuple
@@ -2573,7 +2565,7 @@ static int cxgb4_filter_normal_debugfs_show(struct seq_file *seq, void *v)
 {
         struct adapter *adap = seq->private;
         u32 fconf, tpiconf, chip_ver;
-        struct tid_info *t;
+        struct cxgb4_tid_info *t;
         u8 first, last;
         int i;
 
@@ -2588,7 +2580,7 @@ static int cxgb4_filter_normal_debugfs_show(struct seq_file *seq, void *v)
                 last = FT_LAST_S;
         }
 
-        t = &adap->tids;
+        t = &adap->tidinfo;
 
         if (v == SEQ_START_TOKEN) {
                 seq_puts(seq, "[[Legend: "
@@ -2606,9 +2598,9 @@ static int cxgb4_filter_normal_debugfs_show(struct seq_file *seq, void *v)
                 u32 ftid, fidx = (uintptr_t)v - 2;
                 struct filter_entry *f;
 
-                ftid = fidx + t->hpftid_base;
+		ftid = fidx + t->hpftids.start;
                 if (cxgb4_hpftid_out_of_range(adap, ftid))
-                        ftid += t->nftids- t->nhpftids;
+			ftid += t->ftids.start - t->hpftids.size;
 
                 f = cxgb4_ftid_lookup(adap, ftid);
 
@@ -2624,7 +2616,7 @@ static int cxgb4_filter_normal_debugfs_show(struct seq_file *seq, void *v)
 static inline void *cxgb4_filter_normal_debugfs_get_idx(struct adapter *adap,
                                                         loff_t pos)
 {
-        if (pos > (adap->tids.nftids + adap->tids.nhpftids))
+	if (pos > (adap->tidinfo.ftids.size + adap->tidinfo.hpftids.size))
                 return NULL;
 
         return (void *)(uintptr_t)(pos + 1);
@@ -2743,7 +2735,7 @@ static inline void *cxgb4_filter_hash_debugfs_get_idx(struct adapter *adap,
         if (!is_hashfilter(adap))
                 return NULL;
 
-        if (pos > adap->tids.hash_base + adap->tids.nhash)
+	if (pos > adap->tidinfo.hashtids.start + adap->tidinfo.hashtids.size)
                 return NULL;
 
         return (void *)(uintptr_t)(pos + 1);
@@ -2801,7 +2793,7 @@ const struct file_operations hash_filters_debugfs_fops = {
 };
 
 //---------------------------------- old changes doubtful ------------------------------------------
-
+#if 0
 static bool is_addr_all_mask(u8 *ipmask, int family)
 {
 	if (family == AF_INET) {
@@ -2929,3 +2921,4 @@ bool is_filter_exact_match(struct adapter *adap,
 
 	return true;
 }
+#endif

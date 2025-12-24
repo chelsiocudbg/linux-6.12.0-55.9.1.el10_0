@@ -796,20 +796,17 @@ int cxgb4_validate_flow_actions(struct net_device *dev,
 
 static void cxgb4_tc_flower_hash_prio_add(struct adapter *adap, u32 tc_prio)
 {
-	spin_lock_bh(&adap->tids.ftid_lock);
-	if (adap->tids.tc_hash_tids_max_prio < tc_prio)
-		adap->tids.tc_hash_tids_max_prio = tc_prio;
-	spin_unlock_bh(&adap->tids.ftid_lock);
+	if (adap->tidinfo.tc_hash_tids_max_prio < tc_prio)
+		adap->tidinfo.tc_hash_tids_max_prio = tc_prio;
 }
 
 static void cxgb4_tc_flower_hash_prio_del(struct adapter *adap, u32 tc_prio)
 {
-	struct tid_info *t = &adap->tids;
+	struct cxgb4_tid_info *t = &adap->tidinfo;
 	struct ch_tc_flower_entry *fe;
 	struct rhashtable_iter iter;
 	u32 found = 0;
 
-	spin_lock_bh(&t->ftid_lock);
 	/* Bail if the current rule is not the one with the max
 	 * prio.
 	 */
@@ -849,7 +846,6 @@ static void cxgb4_tc_flower_hash_prio_del(struct adapter *adap, u32 tc_prio)
 		t->tc_hash_tids_max_prio = 0;
 
 out_unlock:
-	spin_unlock_bh(&t->ftid_lock);
 }
 
 int cxgb4_flow_rule_replace(struct net_device *dev, struct flow_rule *rule,
@@ -870,7 +866,6 @@ int cxgb4_flow_rule_replace(struct net_device *dev, struct flow_rule *rule,
 	cxgb4_process_flow_match(dev, rule, fs);
 	cxgb4_process_flow_actions(dev, &rule->action, fs);
 
-	fs->hash = is_filter_exact_match(adap, fs);
 	inet_family = fs->type ? PF_INET6 : PF_INET;
 
 	/* Get a free filter entry TID, where we can insert this new
@@ -884,7 +879,7 @@ int cxgb4_flow_rule_replace(struct net_device *dev, struct flow_rule *rule,
 		return -ENOMEM;
 	}
 
-	if (fidx < adap->tids.nhpftids) {
+	if (fidx < adap->tidinfo.hpftids.size) {
 		fs->prio = 1;
 		fs->hash = 0;
 	}
