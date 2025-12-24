@@ -198,7 +198,7 @@ u32 cudbg_get_entity_length(struct adapter *adap, u32 entity)
 		}
 		break;
 	case CUDBG_DEV_LOG:
-		len = adap->params.devlog.size;
+		len = adap->params.devlog[0].size;
 		break;
 	case CUDBG_CIM_LA:
 		if (is_t6(adap->params.chip)) {
@@ -521,7 +521,7 @@ static int cudbg_read_vpd_reg(struct adapter *padap, u32 addr, u32 len,
 	if (vaddr < 0)
 		return vaddr;
 
-	rc = pci_read_vpd(padap->pdev, vaddr, len, dest);
+	rc = pci_read_vpd(cxgb4_pci_dev(padap), vaddr, len, dest);
 	if (rc < 0)
 		return rc;
 
@@ -713,9 +713,10 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	md->limit = 0;
 	md++;
 
-	md->base = padap->vres.ocq.start;
-	if (padap->vres.ocq.size)
-		md->limit = md->base + padap->vres.ocq.size - 1;
+
+	md->base = padap->uld_inst.vres.ocq.start;
+	if (padap->uld_inst.vres.ocq.size)
+		md->limit = md->base + padap->uld_inst.vres.ocq.size - 1;
 	else
 		md->idx = ARRAY_SIZE(cudbg_region);  /* hide it */
 	md++;
@@ -847,7 +848,7 @@ int cudbg_collect_fw_devlog(struct cudbg_init *pdbg_init,
 		return rc;
 	}
 
-	dparams = &padap->params.devlog;
+	dparams = padap->params.devlog;
 	rc = cudbg_get_buff(pdbg_init, dbg_buff, dparams->size, &temp_buff);
 	if (rc)
 		return rc;
@@ -1284,7 +1285,7 @@ static int cudbg_get_payload_range(struct adapter *padap, u8 mem_type,
 static int cudbg_memory_read(struct cudbg_init *pdbg_init, int win,
 			     int mtype, u32 addr, u32 len, void *hbuf)
 {
-	u32 win_pf, memoffset, mem_aperture, mem_base;
+	u64 win_pf, memoffset, mem_aperture, mem_base;
 	struct adapter *adap = pdbg_init->adap;
 	u32 pos, offset, resid;
 	u32 *res_buf;
@@ -1316,7 +1317,7 @@ static int cudbg_memory_read(struct cudbg_init *pdbg_init, int win,
 	/* Set up initial PCI-E Memory Window to cover the start of our
 	 * transfer.
 	 */
-	t4_memory_update_win(adap, win, pos | win_pf);
+	t4_pcie_mem_access_offset_write(adap, pos, win, win_pf);
 
 	/* Transfer data from the adapter */
 	while (len > 0) {
@@ -1331,7 +1332,7 @@ static int cudbg_memory_read(struct cudbg_init *pdbg_init, int win,
 		if (offset == mem_aperture) {
 			pos += mem_aperture;
 			offset = 0;
-			t4_memory_update_win(adap, win, pos | win_pf);
+			t4_pcie_mem_access_offset_write(adap, pos, win, win_pf);
 		}
 	}
 
@@ -1349,7 +1350,7 @@ static int cudbg_memory_read(struct cudbg_init *pdbg_init, int win,
 		if (offset == mem_aperture) {
 			pos += mem_aperture;
 			offset = 0;
-			t4_memory_update_win(adap, win, pos | win_pf);
+			t4_pcie_mem_access_offset_write(adap, pos, win, win_pf);
 		}
 	}
 
@@ -2196,7 +2197,7 @@ fill_tid:
 	tid->nftids = padap->tids.nftids;
 	tid->ftid_base = padap->tids.ftid_base;
 	tid->aftid_base = padap->tids.aftid_base;
-	tid->aftid_end = padap->tids.aftid_end;
+	tid->aftid_end = padap->tids.aftid_base;
 
 	tid->sftid_base = padap->tids.sftid_base;
 	tid->nsftids = padap->tids.nsftids;
@@ -3330,18 +3331,18 @@ void cudbg_fill_qdesc_num_and_size(const struct adapter *padap,
 
 	/* ULD TXQ, RXQ, and FLQ */
 	tot_entries += CXGB4_TX_MAX * MAX_OFLD_QSETS;
-	tot_entries += CXGB4_ULD_MAX * MAX_ULD_QSETS * 2;
+	tot_entries += CXGB4_ULD_TYPE_MAX * MAX_ULD_QSETS * 2;
 
 	tot_size += CXGB4_TX_MAX * MAX_OFLD_QSETS * MAX_TXQ_ENTRIES *
 		    MAX_TXQ_DESC_SIZE;
-	tot_size += CXGB4_ULD_MAX * MAX_ULD_QSETS * MAX_RSPQ_ENTRIES *
+	tot_size += CXGB4_ULD_TYPE_MAX * MAX_ULD_QSETS * MAX_RSPQ_ENTRIES *
 		    MAX_RXQ_DESC_SIZE;
-	tot_size += CXGB4_ULD_MAX * MAX_ULD_QSETS * MAX_RX_BUFFERS *
+	tot_size += CXGB4_ULD_TYPE_MAX * MAX_ULD_QSETS * MAX_RX_BUFFERS *
 		    MAX_FL_DESC_SIZE;
 
 	/* ULD CIQ */
-	tot_entries += CXGB4_ULD_MAX * MAX_ULD_QSETS;
-	tot_size += CXGB4_ULD_MAX * MAX_ULD_QSETS * SGE_MAX_IQ_SIZE *
+	tot_entries += CXGB4_ULD_TYPE_MAX * MAX_ULD_QSETS;
+	tot_size += CXGB4_ULD_TYPE_MAX * MAX_ULD_QSETS * SGE_MAX_IQ_SIZE *
 		    MAX_RXQ_DESC_SIZE;
 
 	/* ETHOFLD TXQ, RXQ, and FLQ */
@@ -3468,7 +3469,7 @@ int cudbg_collect_qdesc(struct cudbg_init *pdbg_init,
 		u32 base;
 
 		/* ULD RXQ */
-		for (j = 0; j < CXGB4_ULD_MAX; j++) {
+		for (j = 0; j < CXGB4_ULD_TYPE_MAX; j++) {
 			if (!s->uld_rxq_info[j])
 				continue;
 
@@ -3480,7 +3481,7 @@ int cudbg_collect_qdesc(struct cudbg_init *pdbg_init,
 		}
 
 		/* ULD FLQ */
-		for (j = 0; j < CXGB4_ULD_MAX; j++) {
+		for (j = 0; j < CXGB4_ULD_TYPE_MAX; j++) {
 			if (!s->uld_rxq_info[j])
 				continue;
 
@@ -3492,7 +3493,7 @@ int cudbg_collect_qdesc(struct cudbg_init *pdbg_init,
 		}
 
 		/* ULD CIQ */
-		for (j = 0; j < CXGB4_ULD_MAX; j++) {
+		for (j = 0; j < CXGB4_ULD_TYPE_MAX; j++) {
 			if (!s->uld_rxq_info[j])
 				continue;
 
@@ -3581,7 +3582,7 @@ int cudbg_collect_flash(struct cudbg_init *pdbg_init,
 	u32 addr, i;
 	int rc;
 
-	addr = FLASH_EXP_ROM_START;
+	addr = FLASH_LOC_EXP_ROM;
 
 	for (i = 0; i < count; i += SF_PAGE_SIZE) {
 		n = min_t(u32, count - i, SF_PAGE_SIZE);

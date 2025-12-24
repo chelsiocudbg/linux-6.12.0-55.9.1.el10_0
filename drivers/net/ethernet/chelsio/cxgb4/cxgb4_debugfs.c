@@ -1081,7 +1081,7 @@ static const struct seq_operations devlog_seq_ops = {
 static int devlog_open(struct inode *inode, struct file *file)
 {
 	struct adapter *adap = inode->i_private;
-	struct devlog_params *dparams = &adap->params.devlog;
+	struct devlog_params *dparams = adap->params.devlog;
 	struct devlog_info *dinfo;
 	unsigned int index;
 	u32 fseqno;
@@ -1304,13 +1304,13 @@ static ssize_t mbox_write(struct file *file, const char __user *buf,
 	addr = adap->regs + PF_REG(mbox, CIM_PF_MAILBOX_DATA_A);
 	ctrl = addr + MBOX_LEN;
 
-	if (MBOWNER_G(readl(ctrl)) != X_MBOWNER_PL)
+	if (MBOWNER_G(readl(ctrl)) != MBOWNER_PL_X)
 		return -EBUSY;
 
 	for (i = 0; i < 8; i++)
 		writeq(data[i], addr + 8 * i);
 
-	writel(MBMSGVALID_F | MBOWNER_V(X_MBOWNER_FW), ctrl);
+	writel(MBMSGVALID_F | MBOWNER_V(MBOWNER_FW_X), ctrl);
 	return count;
 }
 
@@ -1411,18 +1411,13 @@ static unsigned int xdigit2int(unsigned char c)
 static ssize_t mps_trc_write(struct file *file, const char __user *buf,
 			     size_t count, loff_t *pos)
 {
-	int i, enable, ret;
-	u32 *data, *mask;
-	struct trace_params tp;
-	const struct inode *ino;
-	unsigned int trcidx;
+	struct t4_linux_debugfs_data *d = file_inode(file)->i_private;
+	struct adapter *adap = d->adap;
+	unsigned int trcidx = d->data;
 	char *s, *p, *word, *end;
-	struct adapter *adap;
-	u32 j;
-
-	ino = file_inode(file);
-	trcidx = (uintptr_t)ino->i_private & 3;
-	adap = ino->i_private - trcidx;
+	struct trace_params tp;
+	int i, enable, ret;
+	u32 *data, *mask, j;
 
 	/* Don't accept input more than 1K, can't be anything valid except lots
 	 * of whitespace.  Well, use less.
@@ -2384,7 +2379,8 @@ static const struct file_operations rss_vf_config_debugfs_fops = {
  */
 static int dcb_info_show(struct seq_file *seq, void *v)
 {
-	struct adapter *adap = seq->private;
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
 
 	if (v == SEQ_START_TOKEN) {
 		seq_puts(seq, "Data Center Bridging Information\n");
@@ -2405,7 +2401,6 @@ static int dcb_info_show(struct seq_file *seq, void *v)
 
 		if (dcb->msgs) {
 			int i;
-
 			seq_puts(seq, "\n  Index\t\t\t  :\t");
 			for (i = 0; i < 8; i++)
 				seq_printf(seq, " %3d", i);
@@ -2513,18 +2508,15 @@ static int dcb_info_show(struct seq_file *seq, void *v)
 
 static inline void *dcb_info_get_idx(struct adapter *adap, loff_t pos)
 {
-	return (pos <= adap->params.nports
-		? (void *)((uintptr_t)pos + 1)
-		: NULL);
+	return pos <= adap->params.nports ? (void *)((uintptr_t)pos + 1) : NULL;
 }
 
 static void *dcb_info_start(struct seq_file *seq, loff_t *pos)
 {
-	struct adapter *adap = seq->private;
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
 
-	return (*pos
-		? dcb_info_get_idx(adap, *pos)
-		: SEQ_START_TOKEN);
+	return *pos ? dcb_info_get_idx(adap, *pos) : SEQ_START_TOKEN;
 }
 
 static void dcb_info_stop(struct seq_file *seq, void *v)
@@ -2533,7 +2525,8 @@ static void dcb_info_stop(struct seq_file *seq, void *v)
 
 static void *dcb_info_next(struct seq_file *seq, void *v, loff_t *pos)
 {
-	struct adapter *adap = seq->private;
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
 
 	(*pos)++;
 	return dcb_info_get_idx(adap, *pos);
@@ -2569,8 +2562,11 @@ static const struct file_operations dcb_info_debugfs_fops = {
 
 static int resources_show(struct seq_file *seq, void *v)
 {
-	struct adapter *adapter = seq->private;
-	struct pf_resources *pfres = &adapter->params.pfres;
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	struct pf_resources *pfres;
+
+	pfres = &adap->params.pfres;
 
 	#define S(desc, fmt, var) \
 		seq_printf(seq, "%-60s " fmt "\n", \
@@ -2593,12 +2589,13 @@ static int resources_show(struct seq_file *seq, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(resources);
 
+#ifdef CONFIG_CXGB4_DCB
 /**
  * ethqset2pinfo - return port_info of an Ethernet Queue Set
  * @adap: the adapter
  * @qset: Ethernet Queue Set
  */
-static inline struct port_info *ethqset2pinfo(struct adapter *adap, int qset)
+static struct port_info *ethqset2pinfo(struct adapter *adap, int qset)
 {
 	int pidx;
 
@@ -2614,57 +2611,9 @@ static inline struct port_info *ethqset2pinfo(struct adapter *adap, int qset)
 	BUG();
 	return NULL;
 }
+#endif /* CONFIG_CXGB4_DCB */
 
-static int sge_qinfo_uld_txq_entries(const struct adapter *adap, int uld)
-{
-	const struct sge_uld_txq_info *utxq_info = adap->sge.uld_txq_info[uld];
-
-	if (!utxq_info)
-		return 0;
-
-	return DIV_ROUND_UP(utxq_info->ntxq, 4);
-}
-
-static int sge_qinfo_uld_rspq_entries(const struct adapter *adap, int uld,
-				      bool ciq)
-{
-	const struct sge_uld_rxq_info *urxq_info = adap->sge.uld_rxq_info[uld];
-
-	if (!urxq_info)
-		return 0;
-
-	return ciq ? DIV_ROUND_UP(urxq_info->nciq, 4) :
-		     DIV_ROUND_UP(urxq_info->nrxq, 4);
-}
-
-static int sge_qinfo_uld_rxq_entries(const struct adapter *adap, int uld)
-{
-	return sge_qinfo_uld_rspq_entries(adap, uld, false);
-}
-
-static int sge_qinfo_uld_ciq_entries(const struct adapter *adap, int uld)
-{
-	return sge_qinfo_uld_rspq_entries(adap, uld, true);
-}
-
-static int sge_qinfo_show(struct seq_file *seq, void *v)
-{
-	int eth_entries, ctrl_entries, eohw_entries = 0, eosw_entries = 0;
-	int uld_rxq_entries[CXGB4_ULD_MAX] = { 0 };
-	int uld_ciq_entries[CXGB4_ULD_MAX] = { 0 };
-	int uld_txq_entries[CXGB4_TX_MAX] = { 0 };
-	const struct sge_uld_txq_info *utxq_info;
-	const struct sge_uld_rxq_info *urxq_info;
-	struct cxgb4_tc_port_mqprio *port_mqprio;
-	struct adapter *adap = seq->private;
-	int i, j, n, r = (uintptr_t)v - 1;
-	struct sge *s = &adap->sge;
-
-	eth_entries = DIV_ROUND_UP(adap->sge.ethqsets, 4);
-	ctrl_entries = DIV_ROUND_UP(MAX_CTRL_QUEUES, 4);
-
-	if (r)
-		seq_putc(seq, '\n');
+#define SGE_QINFO_NUM_PER_ROW 4
 
 #define S3(fmt_spec, s, v) \
 do { \
@@ -2681,534 +2630,845 @@ do { \
 #define R(s, v) S3("u", s, rx[i].v)
 #define RL(s, v) R3("lu", s, v)
 
-	if (r < eth_entries) {
-		int base_qset = r * 4;
-		const struct sge_eth_rxq *rx = &s->ethrxq[base_qset];
-		const struct sge_eth_txq *tx = &s->ethtxq[base_qset];
+static void cxgb4_sge_qinfo_eth(struct seq_file *seq, int r, int nentries,
+				const struct sge_eth_rxq *rx,
+				const struct sge_eth_txq *tx,
+				const char *qname)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	struct sge *s = &adap->sge;
+	int i, n;
 
-		n = min(4, s->ethqsets - 4 * r);
+	n = min(SGE_QINFO_NUM_PER_ROW, nentries - SGE_QINFO_NUM_PER_ROW * r);
 
-		S("QType:", "Ethernet");
+	S("QType:", qname);
+	if (rx) {
 		S("Interface:",
 		  rx[i].rspq.netdev ? rx[i].rspq.netdev->name : "N/A");
+		R("RspQ ID:", rspq.abs_id);
+		R("RspQ size:", rspq.size);
+		R("RspQE size:", rspq.iqe_len);
+		R("RspQ CIDX:", rspq.cidx);
+		R("RspQ Gen:", rspq.gen);
+		S3("u", "Intr delay:", rspq_intr_timer(s, &rx[i].rspq));
+		S3("u", "Intr pktcnt:", rspq_intr_pktcnt(s, &rx[i].rspq));
+		RL("RxPackets:", stats.pkts);
+		RL("RxCSO:", stats.rx_cso);
+		RL("VLANxtract:", stats.vlan_ex);
+		RL("LROmerged:", stats.lro_merged);
+		RL("LROpackets:", stats.lro_pkts);
+		RL("RxDrops:", stats.rx_drops);
+		RL("RxBadPkts:", stats.bad_rx_pkts);
+		if (rx[i].fl.size) {
+			R("FL ID:", fl.cntxt_id);
+			R("FL size:", fl.size - 8);
+			R("FL pend:", fl.pend_cred);
+			R("FL avail:", fl.avail);
+			R("FL PIDX:", fl.pidx);
+			R("FL CIDX:", fl.cidx);
+			RL("FLAllocErr:", fl.alloc_failed);
+			RL("FLLrgAlcErr:", fl.large_alloc_failed);
+			RL("FLMapErr:", fl.mapping_err);
+			RL("FLLow:", fl.low);
+			RL("FLStarving:", fl.starving);
+		}
+	}
+
+	if (tx) {
 		T("TxQ ID:", q.cntxt_id);
 		T("TxQ size:", q.size);
 		T("TxQ inuse:", q.in_use);
 		T("TxQ CIDX:", q.cidx);
 		T("TxQ PIDX:", q.pidx);
-#ifdef CONFIG_CHELSIO_T4_DCB
-		T("DCB Prio:", dcb_prio);
-		S3("u", "DCB PGID:",
-		   (ethqset2pinfo(adap, base_qset + i)->dcb.pgid >>
-		    4*(7-tx[i].dcb_prio)) & 0xf);
-		S3("u", "DCB PFC:",
-		   (ethqset2pinfo(adap, base_qset + i)->dcb.pfcen >>
-		    1*(7-tx[i].dcb_prio)) & 0x1);
+		TL("TSO:", tso);
+		TL("TxCSO:", tx_cso);
+		TL("VLANins:", vlan_ins);
+		TL("TxQFull:", q.stops);
+		TL("TxQRestarts:", q.restarts);
+		TL("TxMapErr:", mapping_err);
+	}
+}
+
+static void cxgb4_sge_qinfo_ctrl(struct seq_file *seq, int r, int nentries,
+				 const struct sge_ctrl_txq *tx,
+				 const char *qname)
+{
+	int i, n;
+
+	n = min(SGE_QINFO_NUM_PER_ROW, nentries - SGE_QINFO_NUM_PER_ROW * r);
+	S("QType:", qname);
+	T("TxQ ID:", q.cntxt_id);
+	T("TxQ size:", q.size);
+	T("TxQ inuse:", q.in_use);
+	T("TxQ CIDX:", q.cidx);
+	T("TxQ PIDX:", q.pidx);
+	TL("TxQFull:", q.stops);
+	TL("TxQRestarts:", q.restarts);
+	T("uPCore:", tid_qid_group_id);
+}
+
+static int cxgb4_sge_qinfo_eth_nic(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	const struct sge_eth_rxq *rx;
+	const struct sge_eth_txq *tx;
+	struct sge *s = &adap->sge;
+	int r, nentries, base_qset;
+#ifdef CONFIG_CXGB4_DCB
+	int i, n;
 #endif
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:", s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-		RL("RxPackets:", stats.pkts);
-		RL("RxCSO:", stats.rx_cso);
-		RL("VLANxtract:", stats.vlan_ex);
-		RL("LROmerged:", stats.lro_merged);
-		RL("LROpackets:", stats.lro_pkts);
-		RL("RxDrops:", stats.rx_drops);
-		RL("RxBadPkts:", stats.bad_rx_pkts);
-		TL("TSO:", tso);
-		TL("USO:", uso);
-		TL("TxCSO:", tx_cso);
-		TL("VLANins:", vlan_ins);
-		TL("TxQFull:", q.stops);
-		TL("TxQRestarts:", q.restarts);
-		TL("TxMapErr:", mapping_err);
-		RL("FLAllocErr:", fl.alloc_failed);
-		RL("FLLrgAlcErr:", fl.large_alloc_failed);
-		RL("FLMapErr:", fl.mapping_err);
-		RL("FLLow:", fl.low);
-		RL("FLStarving:", fl.starving);
 
-		goto out;
+	nentries = DIV_ROUND_UP(s->ethqsets, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
 	}
 
-	r -= eth_entries;
-	for_each_port(adap, j) {
-		struct port_info *pi = adap2pinfo(adap, j);
-		const struct sge_eth_rxq *rx;
+	base_qset = r * SGE_QINFO_NUM_PER_ROW;
+	tx = &s->ethtxq[base_qset];
+	rx = &s->ethrxq[base_qset];
 
-		mutex_lock(&pi->vi_mirror_mutex);
-		if (!pi->vi_mirror_count) {
-			mutex_unlock(&pi->vi_mirror_mutex);
-			continue;
-		}
+	cxgb4_sge_qinfo_eth(seq, r, s->ethqsets, rx, tx, "ETHERNET");
+#ifdef CONFIG_CXGB4_DCB
+	n = min(SGE_QINFO_NUM_PER_ROW, nentries - SGE_QINFO_NUM_PER_ROW * r);
+	T("DCB Prio:", dcb_prio);
+	S3("u", "DCB PGID:",
+	   (ethqset2pinfo(adap, base_qset + i)->dcb.pgid >>
+	    4 * (7 - tx[i].dcb_prio)) & 0xf);
+	S3("u", "DCB PFC:",
+	   (ethqset2pinfo(adap, base_qset + i)->dcb.pfcen >>
+	    1 * (7 - tx[i].dcb_prio)) & 0x1);
+#endif
 
-		if (r >= DIV_ROUND_UP(pi->nmirrorqsets, 4)) {
-			r -= DIV_ROUND_UP(pi->nmirrorqsets, 4);
-			mutex_unlock(&pi->vi_mirror_mutex);
-			continue;
-		}
-
-		rx = &s->mirror_rxq[j][r * 4];
-		n = min(4, pi->nmirrorqsets - 4 * r);
-
-		S("QType:", "Mirror-Rxq");
-		S("Interface:",
-		  rx[i].rspq.netdev ? rx[i].rspq.netdev->name : "N/A");
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:", s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-		RL("RxPackets:", stats.pkts);
-		RL("RxCSO:", stats.rx_cso);
-		RL("VLANxtract:", stats.vlan_ex);
-		RL("LROmerged:", stats.lro_merged);
-		RL("LROpackets:", stats.lro_pkts);
-		RL("RxDrops:", stats.rx_drops);
-		RL("RxBadPkts:", stats.bad_rx_pkts);
-		RL("FLAllocErr:", fl.alloc_failed);
-		RL("FLLrgAlcErr:", fl.large_alloc_failed);
-		RL("FLMapErr:", fl.mapping_err);
-		RL("FLLow:", fl.low);
-		RL("FLStarving:", fl.starving);
-
-		mutex_unlock(&pi->vi_mirror_mutex);
-		goto out;
-	}
-
-	if (!adap->tc_mqprio)
-		goto skip_mqprio;
-
-	mutex_lock(&adap->tc_mqprio->mqprio_mutex);
-	if (!refcount_read(&adap->tc_mqprio->refcnt)) {
-		mutex_unlock(&adap->tc_mqprio->mqprio_mutex);
-		goto skip_mqprio;
-	}
-
-	eohw_entries = DIV_ROUND_UP(adap->sge.eoqsets, 4);
-	if (r < eohw_entries) {
-		int base_qset = r * 4;
-		const struct sge_ofld_rxq *rx = &s->eohw_rxq[base_qset];
-		const struct sge_eohw_txq *tx = &s->eohw_txq[base_qset];
-
-		n = min(4, s->eoqsets - 4 * r);
-
-		S("QType:", "ETHOFLD");
-		S("Interface:",
-		  rx[i].rspq.netdev ? rx[i].rspq.netdev->name : "N/A");
-		T("TxQ ID:", q.cntxt_id);
-		T("TxQ size:", q.size);
-		T("TxQ inuse:", q.in_use);
-		T("TxQ CIDX:", q.cidx);
-		T("TxQ PIDX:", q.pidx);
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:", s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		S3("u", "FL size:", rx->fl.size ? rx->fl.size - 8 : 0);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-		RL("RxPackets:", stats.pkts);
-		RL("RxImm:", stats.imm);
-		RL("RxAN", stats.an);
-		RL("RxNoMem", stats.nomem);
-		TL("TSO:", tso);
-		TL("USO:", uso);
-		TL("TxCSO:", tx_cso);
-		TL("VLANins:", vlan_ins);
-		TL("TxQFull:", q.stops);
-		TL("TxQRestarts:", q.restarts);
-		TL("TxMapErr:", mapping_err);
-		RL("FLAllocErr:", fl.alloc_failed);
-		RL("FLLrgAlcErr:", fl.large_alloc_failed);
-		RL("FLMapErr:", fl.mapping_err);
-		RL("FLLow:", fl.low);
-		RL("FLStarving:", fl.starving);
-
-		mutex_unlock(&adap->tc_mqprio->mqprio_mutex);
-		goto out;
-	}
-
-	r -= eohw_entries;
-	for (j = 0; j < adap->params.nports; j++) {
-		int entries;
-		u8 tc;
-
-		port_mqprio = &adap->tc_mqprio->port_mqprio[j];
-		entries = 0;
-		for (tc = 0; tc < port_mqprio->mqprio.qopt.num_tc; tc++)
-			entries += port_mqprio->mqprio.qopt.count[tc];
-
-		if (!entries)
-			continue;
-
-		eosw_entries = DIV_ROUND_UP(entries, 4);
-		if (r < eosw_entries) {
-			const struct sge_eosw_txq *tx;
-
-			n = min(4, entries - 4 * r);
-			tx = &port_mqprio->eosw_txq[4 * r];
-
-			S("QType:", "EOSW-TXQ");
-			S("Interface:",
-			  adap->port[j] ? adap->port[j]->name : "N/A");
-			T("EOTID:", hwtid);
-			T("HWQID:", hwqid);
-			T("State:", state);
-			T("Size:", ndesc);
-			T("In-Use:", inuse);
-			T("Credits:", cred);
-			T("Compl:", ncompl);
-			T("Last-Compl:", last_compl);
-			T("PIDX:", pidx);
-			T("Last-PIDX:", last_pidx);
-			T("CIDX:", cidx);
-			T("Last-CIDX:", last_cidx);
-			T("FLOWC-IDX:", flowc_idx);
-
-			mutex_unlock(&adap->tc_mqprio->mqprio_mutex);
-			goto out;
-		}
-
-		r -= eosw_entries;
-	}
-	mutex_unlock(&adap->tc_mqprio->mqprio_mutex);
-
-skip_mqprio:
-	if (!is_uld(adap))
-		goto skip_uld;
-
-	mutex_lock(&uld_mutex);
-	if (s->uld_txq_info)
-		for (i = 0; i < ARRAY_SIZE(uld_txq_entries); i++)
-			uld_txq_entries[i] = sge_qinfo_uld_txq_entries(adap, i);
-
-	if (s->uld_rxq_info) {
-		for (i = 0; i < ARRAY_SIZE(uld_rxq_entries); i++) {
-			uld_rxq_entries[i] = sge_qinfo_uld_rxq_entries(adap, i);
-			uld_ciq_entries[i] = sge_qinfo_uld_ciq_entries(adap, i);
-		}
-	}
-
-	if (r < uld_txq_entries[CXGB4_TX_OFLD]) {
-		const struct sge_uld_txq *tx;
-
-		utxq_info = s->uld_txq_info[CXGB4_TX_OFLD];
-		tx = &utxq_info->uldtxq[r * 4];
-		n = min(4, utxq_info->ntxq - 4 * r);
-
-		S("QType:", "OFLD-TXQ");
-		T("TxQ ID:", q.cntxt_id);
-		T("TxQ size:", q.size);
-		T("TxQ inuse:", q.in_use);
-		T("TxQ CIDX:", q.cidx);
-		T("TxQ PIDX:", q.pidx);
-
-		goto unlock;
-	}
-
-	r -= uld_txq_entries[CXGB4_TX_OFLD];
-	if (r < uld_rxq_entries[CXGB4_ULD_RDMA]) {
-		const struct sge_ofld_rxq *rx;
-
-		urxq_info = s->uld_rxq_info[CXGB4_ULD_RDMA];
-		rx = &urxq_info->uldrxq[r * 4];
-		n = min(4, urxq_info->nrxq - 4 * r);
-
-		S("QType:", "RDMA-CPL");
-		S("Interface:",
-		  rx[i].rspq.netdev ? rx[i].rspq.netdev->name : "N/A");
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:",	s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-
-		goto unlock;
-	}
-
-	r -= uld_rxq_entries[CXGB4_ULD_RDMA];
-	if (r < uld_ciq_entries[CXGB4_ULD_RDMA]) {
-		const struct sge_ofld_rxq *rx;
-		int ciq_idx = 0;
-
-		urxq_info = s->uld_rxq_info[CXGB4_ULD_RDMA];
-		ciq_idx = urxq_info->nrxq + (r * 4);
-		rx = &urxq_info->uldrxq[ciq_idx];
-		n = min(4, urxq_info->nciq - 4 * r);
-
-		S("QType:", "RDMA-CIQ");
-		S("Interface:",
-		  rx[i].rspq.netdev ? rx[i].rspq.netdev->name : "N/A");
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:",	s->counter_val[rx[i].rspq.pktcnt_idx]);
-
-		goto unlock;
-	}
-
-	r -= uld_ciq_entries[CXGB4_ULD_RDMA];
-	if (r < uld_rxq_entries[CXGB4_ULD_ISCSI]) {
-		const struct sge_ofld_rxq *rx;
-
-		urxq_info = s->uld_rxq_info[CXGB4_ULD_ISCSI];
-		rx = &urxq_info->uldrxq[r * 4];
-		n = min(4, urxq_info->nrxq - 4 * r);
-
-		S("QType:", "iSCSI");
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:",	s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-
-		goto unlock;
-	}
-
-	r -= uld_rxq_entries[CXGB4_ULD_ISCSI];
-	if (r < uld_rxq_entries[CXGB4_ULD_ISCSIT]) {
-		const struct sge_ofld_rxq *rx;
-
-		urxq_info = s->uld_rxq_info[CXGB4_ULD_ISCSIT];
-		rx = &urxq_info->uldrxq[r * 4];
-		n = min(4, urxq_info->nrxq - 4 * r);
-
-		S("QType:", "iSCSIT");
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:",	s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-
-		goto unlock;
-	}
-
-	r -= uld_rxq_entries[CXGB4_ULD_ISCSIT];
-	if (r < uld_rxq_entries[CXGB4_ULD_TLS]) {
-		const struct sge_ofld_rxq *rx;
-
-		urxq_info = s->uld_rxq_info[CXGB4_ULD_TLS];
-		rx = &urxq_info->uldrxq[r * 4];
-		n = min(4, urxq_info->nrxq - 4 * r);
-
-		S("QType:", "TLS");
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:",	s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-
-		goto unlock;
-	}
-
-	r -= uld_rxq_entries[CXGB4_ULD_TLS];
-	if (r < uld_txq_entries[CXGB4_TX_CRYPTO]) {
-		const struct sge_ofld_rxq *rx;
-		const struct sge_uld_txq *tx;
-
-		utxq_info = s->uld_txq_info[CXGB4_TX_CRYPTO];
-		urxq_info = s->uld_rxq_info[CXGB4_ULD_CRYPTO];
-		tx = &utxq_info->uldtxq[r * 4];
-		rx = &urxq_info->uldrxq[r * 4];
-		n = min(4, utxq_info->ntxq - 4 * r);
-
-		S("QType:", "Crypto");
-		T("TxQ ID:", q.cntxt_id);
-		T("TxQ size:", q.size);
-		T("TxQ inuse:", q.in_use);
-		T("TxQ CIDX:", q.cidx);
-		T("TxQ PIDX:", q.pidx);
-		R("RspQ ID:", rspq.abs_id);
-		R("RspQ size:", rspq.size);
-		R("RspQE size:", rspq.iqe_len);
-		R("RspQ CIDX:", rspq.cidx);
-		R("RspQ Gen:", rspq.gen);
-		S3("u", "Intr delay:", qtimer_val(adap, &rx[i].rspq));
-		S3("u", "Intr pktcnt:",	s->counter_val[rx[i].rspq.pktcnt_idx]);
-		R("FL ID:", fl.cntxt_id);
-		R("FL size:", fl.size - 8);
-		R("FL pend:", fl.pend_cred);
-		R("FL avail:", fl.avail);
-		R("FL PIDX:", fl.pidx);
-		R("FL CIDX:", fl.cidx);
-
-		goto unlock;
-	}
-
-	r -= uld_txq_entries[CXGB4_TX_CRYPTO];
-	mutex_unlock(&uld_mutex);
-
-skip_uld:
-	if (r < ctrl_entries) {
-		const struct sge_ctrl_txq *tx = &s->ctrlq[r * 4];
-
-		n = min(4, adap->params.nports - 4 * r);
-
-		S("QType:", "Control");
-		T("TxQ ID:", q.cntxt_id);
-		T("TxQ size:", q.size);
-		T("TxQ inuse:", q.in_use);
-		T("TxQ CIDX:", q.cidx);
-		T("TxQ PIDX:", q.pidx);
-		TL("TxQFull:", q.stops);
-		TL("TxQRestarts:", q.restarts);
-
-		goto out;
-	}
-
-	r -= ctrl_entries;
-	if (r < 1) {
-		const struct sge_rspq *evtq = &s->fw_evtq;
-
-		seq_printf(seq, "%-12s %16s\n", "QType:", "FW event queue");
-		seq_printf(seq, "%-12s %16u\n", "RspQ ID:", evtq->abs_id);
-		seq_printf(seq, "%-12s %16u\n", "RspQ size:", evtq->size);
-		seq_printf(seq, "%-12s %16u\n", "RspQE size:", evtq->iqe_len);
-		seq_printf(seq, "%-12s %16u\n", "RspQ CIDX:", evtq->cidx);
-		seq_printf(seq, "%-12s %16u\n", "RspQ Gen:", evtq->gen);
-		seq_printf(seq, "%-12s %16u\n", "Intr delay:",
-			   qtimer_val(adap, evtq));
-		seq_printf(seq, "%-12s %16u\n", "Intr pktcnt:",
-			   s->counter_val[evtq->pktcnt_idx]);
-
-		goto out;
-	}
-
-#undef R
-#undef RL
-#undef T
-#undef TL
-#undef S
-#undef R3
-#undef T3
-#undef S3
-out:
-	return 0;
-
-unlock:
-	mutex_unlock(&uld_mutex);
 	return 0;
 }
 
-static int sge_queue_entries(struct adapter *adap)
+static int cxgb4_sge_qinfo_eth_trace(struct seq_file *seq, int *row)
 {
-	int i, tot_uld_entries = 0, eohw_entries = 0, eosw_entries = 0;
-	int mirror_rxq_entries = 0;
+	const struct sge_eth_rxq *rx;
+	int r, nentries;
 
-	if (adap->tc_mqprio) {
-		struct cxgb4_tc_port_mqprio *port_mqprio;
-		u8 tc;
+	nentries = 0;
+	if (!row)
+		return nentries;
 
-		mutex_lock(&adap->tc_mqprio->mqprio_mutex);
-		if (adap->sge.eohw_txq)
-			eohw_entries = DIV_ROUND_UP(adap->sge.eoqsets, 4);
-
-		for (i = 0; i < adap->params.nports; i++) {
-			u32 entries = 0;
-
-			port_mqprio = &adap->tc_mqprio->port_mqprio[i];
-			for (tc = 0; tc < port_mqprio->mqprio.qopt.num_tc; tc++)
-				entries += port_mqprio->mqprio.qopt.count[tc];
-
-			if (entries)
-				eosw_entries += DIV_ROUND_UP(entries, 4);
-		}
-		mutex_unlock(&adap->tc_mqprio->mqprio_mutex);
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
 	}
 
-	for_each_port(adap, i) {
-		struct port_info *pi = adap2pinfo(adap, i);
+	rx = NULL;
+	cxgb4_sge_qinfo_eth(seq, r, 0, rx, NULL, "TRACE");
+	return 0;
+}
 
-		mutex_lock(&pi->vi_mirror_mutex);
-		if (pi->vi_mirror_count)
-			mirror_rxq_entries += DIV_ROUND_UP(pi->nmirrorqsets, 4);
-		mutex_unlock(&pi->vi_mirror_mutex);
+static int cxgb4_sge_qinfo_eth_mirror(struct seq_file *seq, int *row)
+{
+	const struct sge_eth_rxq *rx;
+	int r, nentries;
+
+	nentries = 0;
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
 	}
 
-	if (!is_uld(adap))
-		goto lld_only;
+	rx = NULL;
+	cxgb4_sge_qinfo_eth(seq, r, 0, rx, NULL, "MIRROR");
+	return 0;
+}
 
-	mutex_lock(&uld_mutex);
-	for (i = 0; i < CXGB4_TX_MAX; i++)
-		tot_uld_entries += sge_qinfo_uld_txq_entries(adap, i);
+static int cxgb4_sge_qinfo_eth_vxlan(struct seq_file *seq, int *row)
+{
+#if IS_ENABLED(CONFIG_VXLAN)
+	const struct sge_eth_txq *tx;
+	int r, nentries;
 
-	for (i = 0; i < CXGB4_ULD_MAX; i++) {
-		tot_uld_entries += sge_qinfo_uld_rxq_entries(adap, i);
-		tot_uld_entries += sge_qinfo_uld_ciq_entries(adap, i);
+	nentries = 0;
+	if (!row)
+		return nentries;
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
 	}
-	mutex_unlock(&uld_mutex);
 
-lld_only:
-	return DIV_ROUND_UP(adap->sge.ethqsets, 4) + mirror_rxq_entries +
-	       eohw_entries + eosw_entries + tot_uld_entries +
-	       DIV_ROUND_UP(MAX_CTRL_QUEUES, 4) + 1;
+	tx = NULL;
+	cxgb4_sge_qinfo_eth(seq, r, 0, NULL, tx, "VxLAN");
+	return 0;
+#else
+	return row ? -EINVAL : 0;
+#endif /* IS_ENABLED(CONFIG_VXLAN) */
+}
+
+
+static void cxgb4_sge_qinfo_uld_tx(struct seq_file *seq, int r,
+				   enum cxgb4_uld_txq_type qtype,
+				   enum cxgb4_uld_type uld,
+				   const char *qname)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	int start = 0, nentries = 0, extra = 0;
+	struct cxgb4_uld_queue_map *map;
+	struct adapter *adap = d->adap;
+	struct cxgb4_uld_txq *txq;
+	struct net_device *netdev;
+	unsigned long index;
+	int n, i;
+	u8 port;
+
+	for_each_port(adap, port) {
+		netdev = adap->port[port];
+		map = cxgb4_uld_queues_txq_map_get(netdev, qtype, uld);
+		nentries += map->num_queues;
+		if (nentries > r * SGE_QINFO_NUM_PER_ROW - extra)
+			break;
+		start += map->num_queues;
+		extra += roundup(map->num_queues, SGE_QINFO_NUM_PER_ROW) -
+			 map->num_queues;
+	}
+
+	if (!map)
+		return;
+
+#define S3X(fmt_spec, s, v) do { \
+	seq_printf(seq, "%-12s", s); \
+	i = start + extra; \
+	xa_for_each(&map->queues, index, txq) { \
+		if (i >= r * SGE_QINFO_NUM_PER_ROW + n) \
+			break; \
+		if (i >= r * SGE_QINFO_NUM_PER_ROW) \
+			seq_printf(seq, " %16" fmt_spec, v); \
+		i++; \
+	} \
+	seq_putc(seq, '\n'); \
+} while (0)
+
+#define TX(s, v) S3X("u", s, v)
+#define TLX(s, v) S3X("lu", s, v)
+
+	n = min(SGE_QINFO_NUM_PER_ROW,
+		nentries - (SGE_QINFO_NUM_PER_ROW * r - extra));
+
+	S("QType:", qname);
+	S("Interface:", netdev->name);
+	TX("TxQ ID:", txq->ofldtxq->q.cntxt_id);
+	TX("TxQ size:", txq->ofldtxq->q.size);
+	TX("TxQ inuse:", txq->ofldtxq->q.in_use);
+	TX("TxQ CIDX:", txq->ofldtxq->q.cidx);
+	TX("TxQ PIDX:", txq->ofldtxq->q.pidx);
+	TLX("TxQFull:", txq->ofldtxq->q.stops);
+	TLX("TxQRestarts:", txq->ofldtxq->q.restarts);
+	TLX("TxMapErr:", txq->ofldtxq->mapping_err);
+	if (qtype == CXGB4_ULD_TXQ_TYPE_SHARED)
+		TX("uPCore:", txq->tid_qid_group_id);
+
+#undef TLX
+#undef TX
+#undef S3X
+}
+
+static int cxgb4_sge_qinfo_uld_txq_num(struct adapter *adap,
+				       enum cxgb4_uld_txq_type qtype,
+				       enum cxgb4_uld_type uld)
+{
+	struct cxgb4_uld_queue_map *map;
+	struct net_device *netdev;
+	int ntx = 0;
+	u8 port;
+
+	for_each_port(adap, port) {
+		netdev = adap->port[port];
+		map = cxgb4_uld_queues_txq_map_get(netdev, qtype, uld);
+		ntx += roundup(map->num_queues, SGE_QINFO_NUM_PER_ROW);
+	}
+
+	return ntx;
+}
+
+static int cxgb4_sge_qinfo_uld_toe(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	int r, nentries, nsharetx, nsendtx;
+	struct adapter *adap = d->adap;
+	struct sge *s = &adap->sge;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_TOE))
+		return -EOPNOTSUPP;
+
+	nsharetx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SHARED,
+					       CXGB4_ULD_TYPE_TOE);
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_TYPE_TOE);
+	nentries = DIV_ROUND_UP(s->ofldqsets, SGE_QINFO_NUM_PER_ROW) +
+		   DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW) +
+		   DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+#ifdef CONFIG_T4_MA_FAILOVER
+	nentries += DIV_ROUND_UP(s->nfailoverq, SGE_QINFO_NUM_PER_ROW);
+#endif /* CONFIG_T4_MA_FAILOVER */
+
+	if (!row)
+		return nentries;
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	r -= DIV_ROUND_UP(s->ofldqsets, SGE_QINFO_NUM_PER_ROW);
+#ifdef CONFIG_T4_MA_FAILOVER
+	if (r < DIV_ROUND_UP(s->nfailoverq, SGE_QINFO_NUM_PER_ROW)) {
+		rx = &s->failoverq;
+		cxgb4_sge_qinfo_uld_rx(seq, r, s->nfailoverq, rx,
+				       "MA-FAILOVER");
+		return 0;
+	}
+
+	r -= DIV_ROUND_UP(s->nfailoverq, SGE_QINFO_NUM_PER_ROW);
+#endif /* CONFIG_T4_MA_FAILOVER */
+
+	if (r < DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW)) {
+		cxgb4_sge_qinfo_uld_tx(seq, r, CXGB4_ULD_TXQ_TYPE_SHARED,
+				       CXGB4_ULD_TYPE_TOE, "TOE-TX");
+		return 0;
+	}
+
+	r -= DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW);
+	cxgb4_sge_qinfo_uld_tx(seq, r, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+			       CXGB4_ULD_TYPE_TOE, "TOE-SENDTX");
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_rdma(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_RDMA))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_RDMA);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_iscsi(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_ISCSI))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_ISCSI);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_iscsit(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_ISCSIT))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_ISCSIT);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_nvmeh(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_NVME_TCP_HOST))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_TYPE_NVME_TCP_HOST);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_nvmet(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_NVME_TCP_TARGET))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_TYPE_NVME_TCP_TARGET);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_cstor(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_CSTOR))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_TYPE_CSTOR);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_crypto(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	int r, nentries, nsharetx, nsendtx;
+	struct adapter *adap = d->adap;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_CRYPTO))
+		return -EOPNOTSUPP;
+
+	nsharetx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SHARED,
+					       CXGB4_ULD_CRYPTO);
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_CRYPTO);
+	nentries = DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW) +
+		   DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	r -= DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW);
+	cxgb4_sge_qinfo_uld_tx(seq, r, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+			       CXGB4_ULD_CRYPTO, "CRYPTO-SENDTX");
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_uld_chtcp(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int r, nentries, nsendtx;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_CHTCP))
+		return -EOPNOTSUPP;
+
+	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+					      CXGB4_ULD_TYPE_CHTCP);
+	nentries = DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	cxgb4_sge_qinfo_uld_tx(seq, r, CXGB4_ULD_TXQ_TYPE_SENDPATH,
+			       CXGB4_ULD_TYPE_CHTCP, "CHTCP-SENDTX");
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_nic(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	const struct sge_ctrl_txq *ctrlq;
+	struct adapter *adap = d->adap;
+	struct sge *s = &adap->sge;
+	int r, nq, nentries;
+
+	nq = adap->params.nports * adap->params.num_up_cores;
+	if (adap->tids.nsftids)
+		nq = 1;
+
+	nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	ctrlq = &s->ctrlq[r * SGE_QINFO_NUM_PER_ROW];
+	cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "CONTROL");
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_rdma(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	const struct sge_ctrl_txq *ctrlq;
+	struct adapter *adap = d->adap;
+	struct sge *s = &adap->sge;
+	int r, nq, nentries;
+
+	if (!cxgb4_uld_supported(adap, CXGB4_ULD_RDMA))
+		return -EOPNOTSUPP;
+
+	nq = adap->tids.nsftids ? 1 : adap->params.nports * adap->params.num_up_cores;
+	nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	ctrlq = &s->ctrlq[NCHAN * MAX_UP_CORES + r * SGE_QINFO_NUM_PER_ROW];
+	cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "RDMA-CONTROL");
+	return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_iscsi(struct seq_file *seq, int *row)
+{
+       struct t4_linux_debugfs_data *d = seq->private;
+       const struct sge_ctrl_txq *ctrlq;
+       struct adapter *adap = d->adap;
+       struct sge *s = &adap->sge;
+       int r, nq, nentries;
+
+       if (!cxgb4_uld_supported(adap, CXGB4_ULD_ISCSI) ||
+           !cxgb4_uld_sendpath_enabled(adap))
+               return -EOPNOTSUPP;
+
+       nq = adap->tids.nsftids ? 1 : adap->params.nports * adap->params.num_up_cores;
+       nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+       if (!row)
+               return nentries;
+
+       r = *row;
+       if (r >= nentries) {
+               *row -= nentries;
+               return -EINVAL;
+       }
+
+       ctrlq = &s->ctrlq[CXGB4_ULD_CTRLQ_INDEX_ISCSI + (r * SGE_QINFO_NUM_PER_ROW)];
+       cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "ISCSI-CONTROL");
+       return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_iscsit(struct seq_file *seq, int *row)
+{
+       struct t4_linux_debugfs_data *d = seq->private;
+       const struct sge_ctrl_txq *ctrlq;
+       struct adapter *adap = d->adap;
+       struct sge *s = &adap->sge;
+       int r, nq, nentries;
+
+       if (!cxgb4_uld_supported(adap, CXGB4_ULD_ISCSIT) ||
+           !cxgb4_uld_sendpath_enabled(adap))
+               return -EOPNOTSUPP;
+
+       nq = adap->tids.nsftids ? 1 : adap->params.nports * adap->params.num_up_cores;
+       nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+       if (!row)
+               return nentries;
+
+       r = *row;
+       if (r >= nentries) {
+               *row -= nentries;
+               return -EINVAL;
+       }
+
+       ctrlq = &s->ctrlq[CXGB4_ULD_CTRLQ_INDEX_ISCSIT + (r * SGE_QINFO_NUM_PER_ROW)];
+       cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "ISCSIT-CONTROL");
+       return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_nvmeh(struct seq_file *seq, int *row)
+{
+       struct t4_linux_debugfs_data *d = seq->private;
+       const struct sge_ctrl_txq *ctrlq;
+       struct adapter *adap = d->adap;
+       struct sge *s = &adap->sge;
+       int r, nq, nentries;
+
+       if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_NVME_TCP_HOST))
+               return -EOPNOTSUPP;
+
+       nq = adap->tids.nsftids ? 1 : adap->params.nports * adap->params.num_up_cores;
+       nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+       if (!row)
+               return nentries;
+
+       r = *row;
+       if (r >= nentries) {
+               *row -= nentries;
+               return -EINVAL;
+       }
+
+       ctrlq = &s->ctrlq[CXGB4_ULD_CTRLQ_INDEX_NVMEH + r * SGE_QINFO_NUM_PER_ROW];
+       cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "NVMEH-CONTROL");
+       return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_nvmet(struct seq_file *seq, int *row)
+{
+       struct t4_linux_debugfs_data *d = seq->private;
+       const struct sge_ctrl_txq *ctrlq;
+       struct adapter *adap = d->adap;
+       struct sge *s = &adap->sge;
+       int r, nq, nentries;
+
+       if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_NVME_TCP_TARGET))
+               return -EOPNOTSUPP;
+
+       nq = adap->tids.nsftids ? 1 : adap->params.nports * adap->params.num_up_cores;
+       nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+       if (!row)
+               return nentries;
+
+       r = *row;
+       if (r >= nentries) {
+               *row -= nentries;
+               return -EINVAL;
+       }
+
+       ctrlq = &s->ctrlq[CXGB4_ULD_CTRLQ_INDEX_NVMET + r * SGE_QINFO_NUM_PER_ROW];
+       cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "NVMET-CONTROL");
+       return 0;
+}
+
+static int cxgb4_sge_qinfo_ctrl_cstor(struct seq_file *seq, int *row)
+{
+       struct t4_linux_debugfs_data *d = seq->private;
+       const struct sge_ctrl_txq *ctrlq;
+       struct adapter *adap = d->adap;
+       struct sge *s = &adap->sge;
+       int r, nq, nentries;
+
+       if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_CSTOR))
+               return -EOPNOTSUPP;
+
+       nq = adap->tids.nsftids ? 1 : adap->params.nports * adap->params.num_up_cores;
+       nentries = DIV_ROUND_UP(nq, SGE_QINFO_NUM_PER_ROW);
+       if (!row)
+               return nentries;
+
+       r = *row;
+       if (r >= nentries) {
+               *row -= nentries;
+               return -EINVAL;
+       }
+
+       ctrlq = &s->ctrlq[CXGB4_ULD_CTRLQ_INDEX_CSTOR + r * SGE_QINFO_NUM_PER_ROW];
+       cxgb4_sge_qinfo_ctrl(seq, r, nq, ctrlq, "CSTOR-CONTROL");
+       return 0;
+}
+
+static int cxgb4_sge_qinfo_fwevtq(struct seq_file *seq, int *row)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	const struct sge_rspq *fwevtq;
+	struct sge *s = &adap->sge;
+	int i, n, r, nentries = 1;
+
+	if (!row)
+		return nentries;
+
+	r = *row;
+	if (r >= nentries) {
+		*row -= nentries;
+		return -EINVAL;
+	}
+
+	fwevtq = &s->fw_evtq;
+	n = nentries;
+	S("QType:", "FW-EVENT-QUEUE");
+	S3("u", "RspQ ID:", fwevtq->abs_id);
+	S3("u", "RspQ size:", fwevtq->size);
+	S3("u", "RspQE size:", fwevtq->iqe_len);
+	S3("u", "RspQ CIDX:", fwevtq->cidx);
+	S3("u", "RspQ Gen:", fwevtq->gen);
+	S3("u", "Intr delay:", rspq_intr_timer(s, fwevtq));
+	S3("u", "Intr pktcnt:", rspq_intr_pktcnt(s, fwevtq));
+	return 0;
+}
+
+#undef RL
+#undef R
+#undef R3
+#undef TL
+#undef T
+#undef T3
+#undef S
+#undef S3
+
+static int sge_qinfo_show(struct seq_file *seq, void *v)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int ret, r = (uintptr_t)v - 1;
+
+	if (r)
+		seq_putc(seq, '\n');
+
+#define SGE_QINFO_CALL(qtype) do { \
+	ret = cxgb4_sge_qinfo_##qtype(seq, &r); \
+	if (!ret) \
+		goto out; \
+} while (0)
+
+	mutex_lock(&adap->uld_inst.uld_mutex);
+	SGE_QINFO_CALL(eth_nic);
+	SGE_QINFO_CALL(eth_trace);
+	SGE_QINFO_CALL(eth_mirror);
+	SGE_QINFO_CALL(eth_vxlan);
+	SGE_QINFO_CALL(uld_toe);
+	SGE_QINFO_CALL(uld_rdma);
+	SGE_QINFO_CALL(uld_iscsi);
+	SGE_QINFO_CALL(uld_iscsit);
+	SGE_QINFO_CALL(uld_nvmeh);
+	SGE_QINFO_CALL(uld_nvmet);
+	SGE_QINFO_CALL(uld_cstor);
+	SGE_QINFO_CALL(uld_crypto);
+	SGE_QINFO_CALL(uld_chtcp);
+	SGE_QINFO_CALL(ctrl_nic);
+	SGE_QINFO_CALL(ctrl_rdma);
+	SGE_QINFO_CALL(ctrl_iscsi);
+	SGE_QINFO_CALL(ctrl_iscsit);
+	SGE_QINFO_CALL(ctrl_nvmeh);
+	SGE_QINFO_CALL(ctrl_nvmet);
+	SGE_QINFO_CALL(ctrl_cstor);
+	SGE_QINFO_CALL(fwevtq);
+
+#undef SGE_QINFO_CALL
+
+out:
+	mutex_unlock(&adap->uld_inst.uld_mutex);
+	return 0;
+}
+
+static int sge_queue_entries(struct seq_file *seq)
+{
+	struct t4_linux_debugfs_data *d = seq->private;
+	struct adapter *adap = d->adap;
+	int ret, nentries = 0;
+
+#define SGE_QINFO_NUM_CALL(qtype) do { \
+	ret = cxgb4_sge_qinfo_##qtype(seq, NULL); \
+	if (ret > 0) \
+		nentries += ret; \
+} while (0)
+
+	mutex_lock(&adap->uld_inst.uld_mutex);
+	SGE_QINFO_NUM_CALL(eth_nic);
+	SGE_QINFO_NUM_CALL(eth_trace);
+	SGE_QINFO_NUM_CALL(eth_mirror);
+	SGE_QINFO_NUM_CALL(eth_vxlan);
+	SGE_QINFO_NUM_CALL(uld_toe);
+	SGE_QINFO_NUM_CALL(uld_rdma);
+	SGE_QINFO_NUM_CALL(uld_iscsi);
+	SGE_QINFO_NUM_CALL(uld_iscsit);
+	SGE_QINFO_NUM_CALL(uld_nvmeh);
+	SGE_QINFO_NUM_CALL(uld_nvmet);
+	SGE_QINFO_NUM_CALL(uld_cstor);
+	SGE_QINFO_NUM_CALL(uld_crypto);
+	SGE_QINFO_NUM_CALL(uld_chtcp);
+	SGE_QINFO_NUM_CALL(ctrl_nic);
+	SGE_QINFO_NUM_CALL(ctrl_rdma);
+	SGE_QINFO_NUM_CALL(ctrl_iscsi);
+	SGE_QINFO_NUM_CALL(ctrl_iscsit);
+	SGE_QINFO_NUM_CALL(ctrl_nvmeh);
+	SGE_QINFO_NUM_CALL(ctrl_nvmet);
+	SGE_QINFO_NUM_CALL(ctrl_cstor);
+	SGE_QINFO_NUM_CALL(fwevtq);
+
+#undef SGE_QINFO_NUM_CALL
+
+	mutex_unlock(&adap->uld_inst.uld_mutex);
+	return nentries;
 }
 
 static void *sge_queue_start(struct seq_file *seq, loff_t *pos)
 {
-	int entries = sge_queue_entries(seq->private);
-
-	return *pos < entries ? (void *)((uintptr_t)*pos + 1) : NULL;
+	return *pos < sge_queue_entries(seq) ?
+		(void *)((uintptr_t)*pos + 1) : NULL;
 }
 
 static void sge_queue_stop(struct seq_file *seq, void *v)
@@ -3217,10 +3477,9 @@ static void sge_queue_stop(struct seq_file *seq, void *v)
 
 static void *sge_queue_next(struct seq_file *seq, void *v, loff_t *pos)
 {
-	int entries = sge_queue_entries(seq->private);
-
 	++*pos;
-	return *pos < entries ? (void *)((uintptr_t)*pos + 1) : NULL;
+	return *pos < sge_queue_entries(seq) ?
+		(void *)((uintptr_t)*pos + 1) : NULL;
 }
 
 static const struct seq_operations sge_qinfo_seq_ops = {
@@ -3311,85 +3570,85 @@ static const struct file_operations mem_debugfs_fops = {
 
 static int tid_info_show(struct seq_file *seq, void *v)
 {
-	struct adapter *adap = seq->private;
-	const struct tid_info *t;
-	enum chip_type chip;
+        struct adapter *adap = seq->private;
+        const struct tid_info *t;
+        enum chip_type chip;
 
-	t = &adap->tids;
-	chip = CHELSIO_CHIP_VERSION(adap->params.chip);
-	if (t4_read_reg(adap, LE_DB_CONFIG_A) & HASHEN_F) {
-		unsigned int sb;
-		seq_printf(seq, "Connections in use: %u\n",
-			   atomic_read(&t->conns_in_use));
+        t = &adap->tids;
+        chip = CHELSIO_CHIP_VERSION(adap->params.chip);
+        if (t4_read_reg(adap, LE_DB_CONFIG_A) & HASHEN_F) {
+                unsigned int sb;
+                seq_printf(seq, "Connections in use: %u\n",
+                           atomic_read(&t->conns_in_use));
 
-		if (chip <= CHELSIO_T5)
-			sb = t4_read_reg(adap, LE_DB_SERVER_INDEX_A) / 4;
-		else
-			sb = t4_read_reg(adap, LE_DB_SRVR_START_INDEX_A);
+                if (chip <= CHELSIO_T5)
+                        sb = t4_read_reg(adap, LE_DB_SERVER_INDEX_A) / 4;
+                else
+                        sb = t4_read_reg(adap, LE_DB_SRVR_START_INDEX_A);
 
-		if (sb) {
-			seq_printf(seq, "TID range: %u..%u/%u..%u", t->tid_base,
-				   sb - 1, adap->tids.hash_base,
-				   t->tid_base + t->ntids - 1);
-			seq_printf(seq, ", in use: %u/%u\n",
-				   atomic_read(&t->tids_in_use),
-				   atomic_read(&t->hash_tids_in_use));
-		} else if (adap->flags & CXGB4_FW_OFLD_CONN) {
-			seq_printf(seq, "TID range: %u..%u/%u..%u",
-				   t->aftid_base,
-				   t->aftid_end,
-				   adap->tids.hash_base,
-				   t->tid_base + t->ntids - 1);
-			seq_printf(seq, ", in use: %u/%u\n",
-				   atomic_read(&t->tids_in_use),
-				   atomic_read(&t->hash_tids_in_use));
-		} else {
-			seq_printf(seq, "TID range: %u..%u",
-				   adap->tids.hash_base,
-				   t->tid_base + t->ntids - 1);
-			seq_printf(seq, ", in use: %u\n",
-				   atomic_read(&t->hash_tids_in_use));
-		}
-	} else if (t->ntids) {
-		seq_printf(seq, "Connections in use: %u\n",
-			   atomic_read(&t->conns_in_use));
+                if (sb) {
+                        seq_printf(seq, "TID range: %u..%u/%u..%u", t->tid_base,
+                                   sb - 1, adap->tids.hash_base,
+                                   t->tid_base + t->ntids - 1);
+                        seq_printf(seq, ", in use: %u/%u\n",
+                                   atomic_read(&t->tids_in_use),
+                                   atomic_read(&t->hash_tids_in_use));
+                } else if (adap->flags & CXGB4_FW_OFLD_CONN) {
+                        seq_printf(seq, "TID range: %u..%u/%u..%u",
+                                   t->aftid_base,
+                                   t->aftid_end,
+                                   adap->tids.hash_base,
+                                   t->tid_base + t->ntids - 1);
+                        seq_printf(seq, ", in use: %u/%u\n",
+                                   atomic_read(&t->tids_in_use),
+                                   atomic_read(&t->hash_tids_in_use));
+                } else {
+                        seq_printf(seq, "TID range: %u..%u",
+                                   adap->tids.hash_base,
+                                   t->tid_base + t->ntids - 1);
+                        seq_printf(seq, ", in use: %u\n",
+                                   atomic_read(&t->hash_tids_in_use));
+                }
+        } else if (t->ntids) {
+                seq_printf(seq, "Connections in use: %u\n",
+                           atomic_read(&t->conns_in_use));
 
-		seq_printf(seq, "TID range: %u..%u", t->tid_base,
-			   t->tid_base + t->ntids - 1);
-		seq_printf(seq, ", in use: %u\n",
-			   atomic_read(&t->tids_in_use));
-	}
+                seq_printf(seq, "TID range: %u..%u", t->tid_base,
+                           t->tid_base + t->ntids - 1);
+                seq_printf(seq, ", in use: %u\n",
+                           atomic_read(&t->tids_in_use));
+        }
 
-	if (t->nstids)
-		seq_printf(seq, "STID range: %u..%u, in use-IPv4/IPv6: %u/%u\n",
-			   (!t->stid_base &&
-			   (chip <= CHELSIO_T5)) ?
-			   t->stid_base + 1 : t->stid_base,
-			   t->stid_base + t->nstids - 1,
-			   t->stids_in_use - t->v6_stids_in_use,
-			   t->v6_stids_in_use);
+        if (t->nstids)
+                seq_printf(seq, "STID range: %u..%u, in use-IPv4/IPv6: %u/%u\n",
+                           (!t->stid_base &&
+                           (chip <= CHELSIO_T5)) ?
+                           t->stid_base + 1 : t->stid_base,
+                           t->stid_base + t->nstids - 1,
+                           t->stids_in_use - t->v6_stids_in_use,
+                           t->v6_stids_in_use);
 
-	if (t->natids)
-		seq_printf(seq, "ATID range: 0..%u, in use: %u\n",
-			   t->natids - 1, t->atids_in_use);
-	seq_printf(seq, "FTID range: %u..%u\n", t->ftid_base,
-		   t->ftid_base + t->nftids - 1);
-	if (t->nsftids)
-		seq_printf(seq, "SFTID range: %u..%u in use: %u\n",
-			   t->sftid_base, t->sftid_base + t->nsftids - 2,
-			   t->sftids_in_use);
-	if (t->nhpftids)
-		seq_printf(seq, "HPFTID range: %u..%u\n", t->hpftid_base,
-			   t->hpftid_base + t->nhpftids - 1);
-	if (t->neotids)
-		seq_printf(seq, "EOTID range: %u..%u, in use: %u\n",
-			   t->eotid_base, t->eotid_base + t->neotids - 1,
-			   atomic_read(&t->eotids_in_use));
-	if (t->ntids)
-		seq_printf(seq, "HW TID usage: %u IP users, %u IPv6 users\n",
-			   t4_read_reg(adap, LE_DB_ACT_CNT_IPV4_A),
-			   t4_read_reg(adap, LE_DB_ACT_CNT_IPV6_A));
-	return 0;
+        if (t->natids)
+                seq_printf(seq, "ATID range: 0..%u, in use: %u\n",
+                           t->natids - 1, t->atids_in_use);
+        seq_printf(seq, "FTID range: %u..%u\n", t->ftid_base,
+                   t->ftid_base + t->nftids - 1);
+        if (t->nsftids)
+                seq_printf(seq, "SFTID range: %u..%u in use: %u\n",
+                           t->sftid_base, t->sftid_base + t->nsftids - 2,
+                           t->sftids_in_use);
+        if (t->nhpftids)
+                seq_printf(seq, "HPFTID range: %u..%u\n", t->hpftid_base,
+                           t->hpftid_base + t->nhpftids - 1);
+        if (t->neotids)
+                seq_printf(seq, "EOTID range: %u..%u, in use: %u\n",
+                           t->eotid_base, t->eotid_base + t->neotids - 1,
+                           atomic_read(&t->eotids_in_use));
+        if (t->ntids)
+                seq_printf(seq, "HW TID usage: %u IP users, %u IPv6 users\n",
+                           t4_read_reg(adap, LE_DB_ACT_CNT_IPV4_A),
+                           t4_read_reg(adap, LE_DB_ACT_CNT_IPV6_A));
+        return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(tid_info);
 
@@ -3404,11 +3663,13 @@ static void add_debugfs_mem(struct adapter *adap, const char *name,
 static ssize_t blocked_fl_read(struct file *filp, char __user *ubuf,
 			       size_t count, loff_t *ppos)
 {
-	int len;
-	const struct adapter *adap = filp->private_data;
+	struct t4_linux_debugfs_data *d = filp->private_data;
+	const struct adapter *adap = d->adap;
+	ssize_t size;
 	char *buf;
-	ssize_t size = (adap->sge.egr_sz + 3) / 4 +
-			adap->sge.egr_sz / 32 + 2; /* includes ,/\n/\0 */
+	int len;
+	size = (adap->sge.egr_sz + 3) / 4 +
+		adap->sge.egr_sz / 32 + 2; /* includes ,/\n/\0 */
 
 	buf = kzalloc(size, GFP_KERNEL);
 	if (!buf)
@@ -3425,9 +3686,10 @@ static ssize_t blocked_fl_read(struct file *filp, char __user *ubuf,
 static ssize_t blocked_fl_write(struct file *filp, const char __user *ubuf,
 				size_t count, loff_t *ppos)
 {
-	int err;
+	struct t4_linux_debugfs_data *d = filp->private_data;
+	struct adapter *adap = d->adap;
 	unsigned long *t;
-	struct adapter *adap = filp->private_data;
+	int err;
 
 	t = bitmap_zalloc(adap->sge.egr_sz, GFP_KERNEL);
 	if (!t)
@@ -3527,35 +3789,43 @@ DEFINE_SHOW_ATTRIBUTE(meminfo);
 
 static int chcr_stats_show(struct seq_file *seq, void *v)
 {
+	struct t4_linux_debugfs_data *d = seq->private;
 #if IS_ENABLED(CONFIG_CHELSIO_TLS_DEVICE)
 	struct ch_ktls_port_stats_debug *ktls_port;
 	int i = 0;
 #endif
-	struct adapter *adap = seq->private;
+	struct adapter *adap = d->adap;
+	struct chcr_stats_debug *chcr_stats;
 
+	chcr_stats = &adap->uld_inst.stats.chcr;
 	seq_puts(seq, "Chelsio Crypto Accelerator Stats \n");
 	seq_printf(seq, "Cipher Ops: %10u \n",
-		   atomic_read(&adap->chcr_stats.cipher_rqst));
+		   atomic_read(&chcr_stats->cipher_rqst));
 	seq_printf(seq, "Digest Ops: %10u \n",
-		   atomic_read(&adap->chcr_stats.digest_rqst));
+		   atomic_read(&chcr_stats->digest_rqst));
 	seq_printf(seq, "Aead Ops: %10u \n",
-		   atomic_read(&adap->chcr_stats.aead_rqst));
+		   atomic_read(&chcr_stats->aead_rqst));
 	seq_printf(seq, "Completion: %10u \n",
-		   atomic_read(&adap->chcr_stats.complete));
+		   atomic_read(&chcr_stats->complete));
 	seq_printf(seq, "Error: %10u \n",
-		   atomic_read(&adap->chcr_stats.error));
+		   atomic_read(&chcr_stats->error));
 	seq_printf(seq, "Fallback: %10u \n",
-		   atomic_read(&adap->chcr_stats.fallback));
+		   atomic_read(&chcr_stats->fallback));
 	seq_printf(seq, "TLS PDU Tx: %10u\n",
-		   atomic_read(&adap->chcr_stats.tls_pdu_tx));
+		   atomic_read(&chcr_stats->tls_pdu_tx));
 	seq_printf(seq, "TLS PDU Rx: %10u\n",
-		   atomic_read(&adap->chcr_stats.tls_pdu_rx));
+		   atomic_read(&chcr_stats->tls_pdu_rx));
 	seq_printf(seq, "TLS Keys (DDR) Count: %10u\n",
-		   atomic_read(&adap->chcr_stats.tls_key));
+		   atomic_read(&chcr_stats->tls_key));
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
+	struct ch_ipsec_stats_debug *ch_ipsec_stats;
+	ch_ipsec_stats = &adap->uld_inst.stats.ipsec;
 	seq_puts(seq, "\nChelsio Inline IPsec Crypto Accelerator Stats\n");
 	seq_printf(seq, "IPSec PDU: %10u\n",
-		   atomic_read(&adap->ch_ipsec_stats.ipsec_cnt));
+		   atomic_read(&ch_ipsec_stats->ipsec_cnt));
+
+	if (adap->uld[CXGB4_ULD_IPSEC].ch_ipsec_show)
+		adap->uld[CXGB4_ULD_IPSEC].ch_ipsec_show(adap, seq);
 #endif
 #if IS_ENABLED(CONFIG_CHELSIO_TLS_DEVICE)
 	seq_puts(seq, "\nChelsio KTLS Crypto Accelerator Stats\n");
@@ -3754,18 +4024,147 @@ DEFINE_SHOW_ATTRIBUTE(tp_stats);
 
 /* Add an array of Debug FS files.
  */
-void add_debugfs_files(struct adapter *adap,
-		       struct t4_debugfs_entry *files,
-		       unsigned int nfiles)
+void add_debugfs_files(struct adapter *adap, struct dentry *dentry,
+                      unsigned char coreid, struct t4_linux_debugfs_entry *f,
+                      unsigned int n)
 {
+	struct t4_linux_debugfs_data *data;
 	int i;
 
 	/* debugfs support is best effort */
-	for (i = 0; i < nfiles; i++)
-		debugfs_create_file(files[i].name, files[i].mode,
-				    adap->debugfs_root,
-				    (void *)adap + files[i].data,
-				    files[i].ops);
+	for (i = 0; i < n; i++) {
+		data = devm_kzalloc(adap->pdev_dev, sizeof(*data), GFP_KERNEL);
+		if (!data)
+			continue;
+
+		data->adap = adap;
+		data->data = f[i].data;
+		data->coreid = coreid;
+		debugfs_create_file(f[i].name, f[i].mode, dentry, data,
+				f[i].ops);
+	}
+}
+
+static void add_debugfs_files_multicore(struct adapter *adap)
+{
+        static struct t4_linux_debugfs_entry common_files[] = {
+                { "cim_la", &cim_la_fops, 0400, 0 },
+                { "cim_pif_la", &cim_pif_la_fops, 0400, 0 },
+                { "cim_ma_la", &cim_ma_la_fops, 0400, 0 },
+                { "devlog", &devlog_fops, 0400, 0 },
+        };
+        static struct t4_linux_debugfs_entry t4_files[] = {
+                { "ibq_tp0", &cim_ibq_fops, 0400, 0 },
+                { "ibq_tp1", &cim_ibq_fops, 0400, 1 },
+                { "ibq_ulp", &cim_ibq_fops, 0400, 2 },
+                { "ibq_sge0", &cim_ibq_fops, 0400, 3 },
+                { "ibq_sge1", &cim_ibq_fops, 0400, 4 },
+                { "ibq_ncsi", &cim_ibq_fops, 0400, 5 },
+                { "obq_ulp0", &cim_obq_fops, 0400, 0 },
+                { "obq_ulp1", &cim_obq_fops, 0400, 1 },
+                { "obq_ulp2", &cim_obq_fops, 0400, 2 },
+                { "obq_ulp3", &cim_obq_fops, 0400, 3 },
+                { "obq_sge", &cim_obq_fops, 0400, 4 },
+                { "obq_ncsi", &cim_obq_fops, 0400, 5 },
+        };
+        static struct t4_linux_debugfs_entry t5_files[] = {
+                { "ibq_tp0", &cim_ibq_fops, 0400, 0 },
+                { "ibq_tp1", &cim_ibq_fops, 0400, 1 },
+                { "ibq_ulp", &cim_ibq_fops, 0400, 2 },
+                { "ibq_sge0", &cim_ibq_fops, 0400, 3 },
+                { "ibq_sge1", &cim_ibq_fops, 0400, 4 },
+                { "ibq_ncsi", &cim_ibq_fops, 0400, 5 },
+                { "obq_ulp0", &cim_obq_fops, 0400, 0 },
+                { "obq_ulp1", &cim_obq_fops, 0400, 1 },
+                { "obq_ulp2", &cim_obq_fops, 0400, 2 },
+                { "obq_ulp3", &cim_obq_fops, 0400, 3 },
+                { "obq_sge", &cim_obq_fops, 0400, 4 },
+                { "obq_ncsi", &cim_obq_fops, 0400, 5 },
+                { "obq_sge_rx_q0", &cim_obq_fops, 0400, 6 },
+                { "obq_sge_rx_q1", &cim_obq_fops, 0400, 7 },
+        };
+        static struct t4_linux_debugfs_entry t7_files[] = {
+                { "ibq_tp0", &cim_ibq_fops, 0400, 0 },
+                { "ibq_tp1", &cim_ibq_fops, 0400, 1 },
+                { "ibq_tp2", &cim_ibq_fops, 0400, 2 },
+                { "ibq_tp3", &cim_ibq_fops, 0400, 3 },
+                { "ibq_ulp", &cim_ibq_fops, 0400, 4 },
+                { "ibq_sge0", &cim_ibq_fops, 0400, 5 },
+                { "ibq_sge1", &cim_ibq_fops, 0400, 6 },
+                { "ibq_ncsi", &cim_ibq_fops, 0400, 7 },
+                { "ibq_ipc1", &cim_ibq_fops, 0400, 9 },
+                { "ibq_ipc2", &cim_ibq_fops, 0400, 10 },
+                { "ibq_ipc3", &cim_ibq_fops, 0400, 11 },
+                { "ibq_ipc4", &cim_ibq_fops, 0400, 12 },
+                { "ibq_ipc5", &cim_ibq_fops, 0400, 13 },
+                { "ibq_ipc6", &cim_ibq_fops, 0400, 14 },
+                { "ibq_ipc7", &cim_ibq_fops, 0400, 15 },
+                { "obq_ulp0", &cim_obq_fops, 0400, 0 },
+                { "obq_ulp1", &cim_obq_fops, 0400, 1 },
+                { "obq_ulp2", &cim_obq_fops, 0400, 2 },
+                { "obq_ulp3", &cim_obq_fops, 0400, 3 },
+                { "obq_sge", &cim_obq_fops, 0400, 4 },
+                { "obq_ncsi", &cim_obq_fops, 0400, 5 },
+                { "obq_sge_rx_q0", &cim_obq_fops, 0400, 6 },
+                { "obq_ipc1", &cim_obq_fops, 0400, 9 },
+                { "obq_ipc2", &cim_obq_fops, 0400, 10 },
+                { "obq_ipc3", &cim_obq_fops, 0400, 11 },
+                { "obq_ipc4", &cim_obq_fops, 0400, 12 },
+                { "obq_ipc5", &cim_obq_fops, 0400, 13 },
+                { "obq_ipc6", &cim_obq_fops, 0400, 14 },
+                { "obq_ipc7", &cim_obq_fops, 0400, 15 },
+        };
+        static struct t4_linux_debugfs_entry t7_sec_files[] = {
+                { "ibq_tp0", &cim_ibq_fops, 0400, 0 },
+                { "ibq_tp1", &cim_ibq_fops, 0400, 1 },
+                { "ibq_tp2", &cim_ibq_fops, 0400, 2 },
+                { "ibq_tp3", &cim_ibq_fops, 0400, 3 },
+                { "ibq_ulp", &cim_ibq_fops, 0400, 4 },
+                { "ibq_sge0", &cim_ibq_fops, 0400, 5 },
+                { "ibq_ipc0", &cim_ibq_fops, 0400, 9 },
+                { "obq_ulp0", &cim_obq_fops, 0400, 0 },
+                { "obq_ulp1", &cim_obq_fops, 0400, 1 },
+                { "obq_ulp2", &cim_obq_fops, 0400, 2 },
+                { "obq_ulp3", &cim_obq_fops, 0400, 3 },
+                { "obq_sge", &cim_obq_fops, 0400, 4 },
+                { "obq_sge_rx_q0", &cim_obq_fops, 0400, 6 },
+                { "obq_ipc0", &cim_obq_fops, 0400, 9 },
+        };
+        u32 chip = CHELSIO_CHIP_VERSION(adap->params.chip);
+        char name[8];
+        u8 i;
+
+        /* Add primary core files */
+        add_debugfs_files(adap, adap->debugfs_root, 0, common_files,
+                          ARRAY_SIZE(common_files));
+
+        switch (chip) {
+        case CHELSIO_T4:
+                add_debugfs_files(adap, adap->debugfs_root, 0, t4_files,
+                                  ARRAY_SIZE(t4_files));
+                break;
+        case CHELSIO_T5:
+        case CHELSIO_T6:
+                add_debugfs_files(adap, adap->debugfs_root, 0, t5_files,
+                                  ARRAY_SIZE(t5_files));
+                break;
+        default:
+                add_debugfs_files(adap, adap->debugfs_root, 0, t7_files,
+                                  ARRAY_SIZE(t7_files));
+                break;
+        }
+
+        /* Add secondary core files */
+        for (i = 1; i < adap->params.num_up_cores; i++) {
+                snprintf(name, sizeof(name), "core_%u", i);
+                adap->debugfs_multicore[i] =
+                        debugfs_create_dir(name, adap->debugfs_root);
+
+                add_debugfs_files(adap, adap->debugfs_multicore[i], i,
+                                  common_files, ARRAY_SIZE(common_files));
+                add_debugfs_files(adap, adap->debugfs_multicore[i], i,
+                                  t7_sec_files, ARRAY_SIZE(t7_sec_files));
+        }
 }
 
 int t4_setup_debugfs(struct adapter *adap)
@@ -3773,14 +4172,11 @@ int t4_setup_debugfs(struct adapter *adap)
 	int i;
 	u32 size = 0;
 
-	static struct t4_debugfs_entry t4_debugfs_files[] = {
-		{ "cim_la", &cim_la_fops, 0400, 0 },
-		{ "cim_pif_la", &cim_pif_la_fops, 0400, 0 },
-		{ "cim_ma_la", &cim_ma_la_fops, 0400, 0 },
-		{ "cim_qcfg", &cim_qcfg_fops, 0400, 0 },
+	static struct t4_linux_debugfs_entry t4_debugfs_files[] = {
 		{ "clk", &clk_fops, 0400, 0 },
-		{ "devlog", &devlog_fops, 0400, 0 },
-		{ "mboxlog", &mboxlog_fops, 0400, 0 },
+#ifdef T4_OS_LOG_MBOX_CMDS
+                { "mboxlog", &mboxlog_fops, 0400, 0 },
+#endif
 		{ "mbox0", &mbox_debugfs_fops, 0600, 0 },
 		{ "mbox1", &mbox_debugfs_fops, 0600, 1 },
 		{ "mbox2", &mbox_debugfs_fops, 0600, 2 },
@@ -3789,64 +4185,26 @@ int t4_setup_debugfs(struct adapter *adap)
 		{ "mbox5", &mbox_debugfs_fops, 0600, 5 },
 		{ "mbox6", &mbox_debugfs_fops, 0600, 6 },
 		{ "mbox7", &mbox_debugfs_fops, 0600, 7 },
-		{ "trace0", &mps_trc_debugfs_fops, 0600, 0 },
-		{ "trace1", &mps_trc_debugfs_fops, 0600, 1 },
-		{ "trace2", &mps_trc_debugfs_fops, 0600, 2 },
-		{ "trace3", &mps_trc_debugfs_fops, 0600, 3 },
-		{ "l2t", &t4_l2t_fops, 0400, 0},
 		{ "mps_tcam", &mps_tcam_debugfs_fops, 0400, 0 },
+		{ "tp_la", &tp_la_fops, 0400, 0 },
+		{ "ulprx_la", &ulprx_la_fops, 0400, 0 },
+		{ "sensors", &sensors_fops, 0400, 0 },
+		{ "tp_stats", &tp_stats_fops, 0400, 0 },
+		{ "pm_stats", &pm_stats_debugfs_fops, 0400, 0 },
+		{ "tx_rate", &tx_rate_fops, 0400, 0 },
+		{ "cctrl", &cctrl_tbl_fops, 0400, 0 },
 		{ "rss", &rss_debugfs_fops, 0400, 0 },
 		{ "rss_config", &rss_config_fops, 0400, 0 },
 		{ "rss_key", &rss_key_debugfs_fops, 0400, 0 },
 		{ "rss_pf_config", &rss_pf_config_debugfs_fops, 0400, 0 },
 		{ "rss_vf_config", &rss_vf_config_debugfs_fops, 0400, 0 },
-		{ "resources", &resources_fops, 0400, 0 },
-#ifdef CONFIG_CHELSIO_T4_DCB
-		{ "dcb_info", &dcb_info_debugfs_fops, 0400, 0 },
-#endif
-		{ "sge_qinfo", &sge_qinfo_debugfs_fops, 0400, 0 },
-		{ "ibq_tp0",  &cim_ibq_fops, 0400, 0 },
-		{ "ibq_tp1",  &cim_ibq_fops, 0400, 1 },
-		{ "ibq_ulp",  &cim_ibq_fops, 0400, 2 },
-		{ "ibq_sge0", &cim_ibq_fops, 0400, 3 },
-		{ "ibq_sge1", &cim_ibq_fops, 0400, 4 },
-		{ "ibq_ncsi", &cim_ibq_fops, 0400, 5 },
-		{ "obq_ulp0", &cim_obq_fops, 0400, 0 },
-		{ "obq_ulp1", &cim_obq_fops, 0400, 1 },
-		{ "obq_ulp2", &cim_obq_fops, 0400, 2 },
-		{ "obq_ulp3", &cim_obq_fops, 0400, 3 },
-		{ "obq_sge",  &cim_obq_fops, 0400, 4 },
-		{ "obq_ncsi", &cim_obq_fops, 0400, 5 },
-		{ "tp_la", &tp_la_fops, 0400, 0 },
-		{ "ulprx_la", &ulprx_la_fops, 0400, 0 },
-		{ "sensors", &sensors_fops, 0400, 0 },
-		{ "pm_stats", &pm_stats_debugfs_fops, 0400, 0 },
-		{ "tx_rate", &tx_rate_fops, 0400, 0 },
-		{ "cctrl", &cctrl_tbl_fops, 0400, 0 },
-#if IS_ENABLED(CONFIG_IPV6)
-		{ "clip_tbl", &clip_tbl_fops, 0400, 0 },
-#endif
-		{ "tids", &tid_info_fops, 0400, 0},
-		{ "blocked_fl", &blocked_fl_fops, 0600, 0 },
-		{ "meminfo", &meminfo_fops, 0400, 0 },
-		{ "crypto", &chcr_stats_fops, 0400, 0 },
-		{ "tp_stats", &tp_stats_fops, 0400, 0 },
+		{ "meminfo", &meminfo_fops, 0400, 0 }
 	};
 
-	/* Debug FS nodes common to all T5 and later adapters.
-	 */
-	static struct t4_debugfs_entry t5_debugfs_files[] = {
-		{ "obq_sge_rx_q0", &cim_obq_fops, 0400, 6 },
-		{ "obq_sge_rx_q1", &cim_obq_fops, 0400, 7 },
-	};
+	add_debugfs_files(adap, adap->debugfs_root, 0, t4_debugfs_files,
+			ARRAY_SIZE(t4_debugfs_files));
 
-	add_debugfs_files(adap,
-			  t4_debugfs_files,
-			  ARRAY_SIZE(t4_debugfs_files));
-	if (!is_t4(adap->params.chip))
-		add_debugfs_files(adap,
-				  t5_debugfs_files,
-				  ARRAY_SIZE(t5_debugfs_files));
+	add_debugfs_files_multicore(adap);
 
 	i = t4_read_reg(adap, MA_TARGET_MEM_ENABLE_A);
 	if (i & EDRAM0_ENABLE_F) {

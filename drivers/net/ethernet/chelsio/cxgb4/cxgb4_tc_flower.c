@@ -877,8 +877,7 @@ int cxgb4_flow_rule_replace(struct net_device *dev, struct flow_rule *rule,
 	 * rule. Only insert rule if its prio doesn't conflict with
 	 * existing rules.
 	 */
-	fidx = cxgb4_get_free_ftid(dev, inet_family, fs->hash,
-				   tc_prio);
+	fidx = CXGB4_FILTER_ID_ANY & 0x0fffffff;
 	if (fidx < 0) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "No free LETCAM index available");
@@ -899,7 +898,7 @@ int cxgb4_flow_rule_replace(struct net_device *dev, struct flow_rule *rule,
 	fs->tc_prio = tc_prio;
 
 	init_completion(&ctx.completion);
-	ret = __cxgb4_set_filter(dev, fidx, fs, &ctx);
+	ret = cxgb4_filter_create(dev, fidx, fs, &ctx, GFP_KERNEL);
 	if (ret) {
 		NL_SET_ERR_MSG_FMT_MOD(extack, "filter creation err %d", ret);
 		return ret;
@@ -959,7 +958,7 @@ del_filter:
 	if (fs->hash)
 		cxgb4_tc_flower_hash_prio_del(adap, cls->common.prio);
 
-	cxgb4_del_filter(dev, ch_flower->filter_id, &ch_flower->fs);
+	cxgb4_filter_delete(dev, ch_flower->filter_id, &ch_flower->fs, NULL, GFP_KERNEL);
 
 free_entry:
 	kfree(ch_flower);
@@ -975,7 +974,7 @@ int cxgb4_flow_rule_destroy(struct net_device *dev, u32 tc_prio,
 
 	hash = fs->hash;
 
-	ret = cxgb4_del_filter(dev, tid, fs);
+	ret = cxgb4_filter_delete(dev, tid, fs, NULL, GFP_KERNEL);
 	if (ret)
 		return ret;
 
@@ -1026,7 +1025,7 @@ static void ch_flower_stats_handler(struct work_struct *work)
 
 		while ((flower_entry = rhashtable_walk_next(&iter)) &&
 		       !IS_ERR(flower_entry)) {
-			ret = cxgb4_get_filter_counters(adap->port[0],
+			ret = cxgb4_filter_get_counters(adap->port[0],
 							flower_entry->filter_id,
 							&packets, &bytes,
 							flower_entry->fs.hash);
@@ -1072,7 +1071,7 @@ int cxgb4_tc_flower_stats(struct net_device *dev,
 		goto err;
 	}
 
-	ret = cxgb4_get_filter_counters(dev, ch_flower->filter_id,
+	ret = cxgb4_filter_get_counters(dev, ch_flower->filter_id,
 					&packets, &bytes,
 					ch_flower->fs.hash);
 	if (ret < 0)
