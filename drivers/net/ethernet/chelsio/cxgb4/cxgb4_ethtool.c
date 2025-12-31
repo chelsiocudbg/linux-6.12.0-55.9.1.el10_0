@@ -360,7 +360,7 @@ static void get_stats(struct net_device *dev, struct ethtool_stats *stats,
 	int i;
 	u64 *p0;
 
-	t4_get_port_stats_offset(adapter, pi->tx_chan,
+	t4_get_port_stats_offset(adapter, pi->lport,
 				 (struct port_stats *)data,
 				 &pi->stats_base);
 

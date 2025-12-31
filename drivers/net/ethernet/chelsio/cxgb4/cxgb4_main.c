@@ -311,6 +311,12 @@ static void link_report(struct net_device *dev)
 		case 100000:
 			s = "100Gbps";
 			break;
+		case 200000:
+			s = "200Gbps";
+			break;
+		case 400000:
+			s = "400Gbps";
+			break;
 		default:
 			pr_info("%s: unsupported speed: %d\n",
 				dev->name, p->link_cfg.speed);
@@ -2186,8 +2192,8 @@ static void attach_ulds(struct adapter *adap)
         list_add_tail(&adap->list_node, &adapter_list);
         for (i = 0; i < CXGB4_ULD_TYPE_MAX; i++) {
                 mutex_lock(&adap->uld_inst.uld_mutex);
-		mutex_unlock(&uld_mutex);
 		if (cxgb4_ulds[i].add) {
+			cxgb4_uld_alloc_resources(adap, i, &cxgb4_ulds[i]);
                         if (adap->flags & CXGB4_FULL_INIT_DONE)
                                 cxgb4_uld_txq_alloc_shared(adap, i);
                         uld_attach(adap, i);
@@ -2215,7 +2221,6 @@ static void detach_ulds(struct adapter *adap)
 					CXGB4_STATE_DETACH);
 			if (adap->flags & CXGB4_FULL_INIT_DONE)
 				cxgb4_uld_txq_free_shared(adap, i);
-			adap->uld_handle[i] = NULL;
 		}
 		mutex_unlock(&adap->uld_inst.uld_mutex);
 	}
@@ -6481,15 +6486,16 @@ void cxgb4_adap_remove(struct adapter *adapter)
 		 * valid filters ...
 		 */
 		cxgb4_filter_clear_all(adapter);
-		disable_interrupts(adapter);
 
 		if (cxgb4_uld_supported_any(adapter)) {
 			if (!list_empty(&adapter->list_node))
 				detach_ulds(adapter);
 			cxgb4_uld_queues_cleanup(adapter);
+			t4_uld_clean_up(adapter);
 		}
 		cxgb4_uld_cleanup(adapter);
 		adap_free_hma_mem(adapter);
+		disable_interrupts(adapter);
 
 		for_each_port(adapter, i)
 			if (adapter->port[i]->reg_state == NETREG_REGISTERED)
@@ -6562,6 +6568,7 @@ void cxgb4_adap_shutdown(struct adapter *adapter)
 		if (cxgb4_uld_supported_any(adapter)) {
 			detach_ulds(adapter);
 			cxgb4_uld_queues_cleanup(adapter);
+			t4_uld_clean_up(adapter);
 		}
 
 		disable_interrupts(adapter);

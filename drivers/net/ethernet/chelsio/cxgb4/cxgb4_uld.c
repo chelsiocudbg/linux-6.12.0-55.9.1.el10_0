@@ -2730,8 +2730,6 @@ void t4_uld_mem_free(struct adapter *adap)
 static void cxgb4_shutdown_uld_adapter(struct adapter *adap, enum cxgb4_uld_type type)
 {
 	if (adap->uld_handle[type]) {
-		adap->uld_handle[type]= NULL;
-		cxgb4_ulds[type].add = NULL;
 
 		if (adap->flags & CXGB4_FULL_INIT_DONE)
 			quiesce_rx_uld(adap, type);
@@ -2938,7 +2936,7 @@ int cxgb4_set_ktls_feature(struct adapter *adap, bool enable)
 #endif
 
 
-static void cxgb4_uld_alloc_resources(struct adapter *adap,
+void cxgb4_uld_alloc_resources(struct adapter *adap,
 				      enum cxgb4_uld_type type,
 				      const struct cxgb4_uld_info *p)
 {
@@ -3033,8 +3031,8 @@ int cxgb4_unregister_uld(enum cxgb4_uld_type type)
 		mutex_lock(&adap->uld_inst.uld_mutex);
 		if (adap->flags & CXGB4_FULL_INIT_DONE) {
 			cxgb4_uld_txq_free_shared(adap, type);
-			cxgb4_shutdown_uld_adapter(adap, type);
 		}
+		cxgb4_shutdown_uld_adapter(adap, type);
 		adap->uld_handle[type] = NULL;
 		mutex_unlock(&adap->uld_inst.uld_mutex);
 	}
