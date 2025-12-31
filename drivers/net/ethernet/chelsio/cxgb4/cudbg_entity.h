@@ -6,6 +6,12 @@
 #ifndef __CUDBG_ENTITY_H__
 #define __CUDBG_ENTITY_H__
 
+#ifdef __GNUC__
+#define ATTRIBUTE_UNUSED __attribute__ ((unused))
+#else
+#define ATTRIBUTE_UNUSED
+#endif
+
 #define EDC0_FLAG 0
 #define EDC1_FLAG 1
 #define MC_FLAG 2
@@ -21,13 +27,58 @@ struct cudbg_mbox_log {
 	u32 lo[MBOX_LEN / 8];
 };
 
-struct cudbg_cim_qcfg {
-	u8 chip;
-	u16 base[CIM_NUM_IBQ + CIM_NUM_OBQ_T5];
-	u16 size[CIM_NUM_IBQ + CIM_NUM_OBQ_T5];
-	u16 thres[CIM_NUM_IBQ];
-	u32 obq_wr[2 * CIM_NUM_OBQ_T5];
-	u32 stat[4 * (CIM_NUM_IBQ + CIM_NUM_OBQ_T5)];
+#define CUDBG_CIM_IBQ_REV 1
+
+struct struct_cim_ibq_rev1 {
+       struct cudbg_ver_hdr ver_hdr;
+       u8 qid;
+       u8 coreid;
+       u32 data[]; /* Must be last */
+};
+
+#define CUDBG_CIM_OBQ_REV 1
+
+struct struct_cim_obq_rev1 {
+       struct cudbg_ver_hdr ver_hdr;
+       u8 qid;
+       u8 coreid;
+       u32 data[]; /* Must be last */
+};
+
+#define CUDBG_CIM_QCFG_REV 1
+
+enum cudbg_entity_cim_qcfg_qtype {
+       CUDBG_ENTITY_CIM_QCFG_QTYPE_IBQ = 0,
+       CUDBG_ENTITY_CIM_QCFG_QTYPE_OBQ,
+};
+
+struct struct_cim_qcfg_rev1_data {
+       u8 qtype;
+       u8 qid;
+       u16 base;
+       u16 size;
+       u16 thres;
+       u32 obq_wr[2];
+       u32 stat[4];
+};
+
+struct struct_cim_qcfg_rev1 {
+       struct cudbg_ver_hdr ver_hdr;
+       u8 num_cim_ibq;
+       u8 num_cim_obq;
+       u8 coreid;
+       struct struct_cim_qcfg_rev1_data data[]; /* Must be last */
+};
+
+#define CUDBG_CIM_LA_REV 1
+
+struct struct_cim_la_rev1 {
+       struct cudbg_ver_hdr ver_hdr;
+       u8 coreid;
+       u8 ncol;
+       u16 nrow;
+       u32 config;
+       u32 data[]; /* Must be last */
 };
 
 struct cudbg_rss_vf_conf {
@@ -48,6 +99,25 @@ struct cudbg_hw_sched {
 	u32 pace_tab[NTX_SCHED];
 	u32 mode;
 	u32 map;
+};
+
+#define CUDBG_TP_INDIR_REG_REV 1
+#define CUDBG_PM_INDIR_REG_REV 1
+#define CUDBG_MA_INDIR_REG_REV 1
+#define CUDBG_UP_CIM_INDIR_REG_REV 1
+#define CUDBG_HMA_INDIR_REG_REV 1
+
+struct cudbg_indir_reg_data {
+       u32 offset;
+       u32 data;
+};
+
+struct cudbg_indir_reg_entity {
+       struct cudbg_ver_hdr ver_hdr;
+       u32 indir_reg;
+       u32 indir_data;
+       u32 nentries;
+       struct cudbg_indir_reg_data data[];
 };
 
 #define SGE_QBASE_DATA_REG_NUM 4
@@ -193,13 +263,31 @@ struct cudbg_tid_info_region_rev1 {
 #define CUDBG_LOWMEM_MAX_CTXT_QIDS 256
 #define CUDBG_MAX_FL_QIDS 1024
 
-struct cudbg_ch_cntxt {
-	u32 cntxt_type;
-	u32 cntxt_id;
-	u32 data[SGE_CTXT_SIZE / 4];
+#define CUDBG_SGE_CTXT_REV 1
+#define CUDBG_SGE_CTXT_DATA_MAX 16
+
+struct struct_sge_ctxt_rev1_data {
+       u8 ctxt_type;
+       u8 size;
+       u32 ctxt_id;
+       u32 data[CUDBG_SGE_CTXT_DATA_MAX];
+};
+
+struct struct_sge_ctxt_rev1 {
+       struct cudbg_ver_hdr ver_hdr;
+       u32 nentries;
+       struct struct_sge_ctxt_rev1_data data[]; /* Must be last */
 };
 
 #define CUDBG_MAX_RPLC_SIZE 128
+
+struct cudbg_cntxt_field {
+        char *name;
+        u32 start_bit;
+        u32 end_bit;
+        u32 shift;
+        u32 islog2;
+};
 
 struct cudbg_mps_tcam {
 	u64 mask;
@@ -415,5 +503,7 @@ struct tid_info_region_rev1 {
         u32 reserved[11];
 };
 
-
+int cudbg_view_sge_ctxt(u8 ctxt_type, u32 qid, u32 *ctxt_data,
+                       struct cudbg_cntxt_field *field,
+                       struct cudbg_buffer *cudbg_poutbuf);
 #endif /* __CUDBG_ENTITY_H__ */

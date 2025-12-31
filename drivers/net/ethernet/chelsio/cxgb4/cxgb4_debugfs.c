@@ -3609,11 +3609,11 @@ static int tid_info_show(struct seq_file *seq, void *v)
 		unsigned int server_base, hash_base;
 
 		if (chip_ver > CHELSIO_T5) {
-			server_base = t4_read_reg(adap, A_LE_DB_SRVR_START_INDEX);
-			hash_base = t4_read_reg(adap, A_T6_LE_DB_HASH_TID_BASE);
+			server_base = t4_read_reg(adap, LE_DB_SRVR_START_INDEX_A);
+			hash_base = t4_read_reg(adap, T6_LE_DB_HASH_TID_BASE_A);
 		} else {
-			server_base = t4_read_reg(adap, A_LE_DB_SERVER_INDEX) / 4;
-			hash_base = t4_read_reg(adap, A_LE_DB_TID_HASHBASE);
+			server_base = t4_read_reg(adap, LE_DB_SERVER_INDEX_A) / 4;
+			hash_base = t4_read_reg(adap, LE_DB_TID_HASHBASE_A);
 		}
 		seq_printf(seq, "TID range: %u..%u/%u..%u",
 				t->tids.start,
