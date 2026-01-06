@@ -1925,6 +1925,7 @@ static int cxgb4_get_module_info(struct net_device *dev,
 	case FW_PORT_TYPE_SFP:
 	case FW_PORT_TYPE_QSA:
 	case FW_PORT_TYPE_SFP28:
+	case FW_PORT_TYPE_SFP56:
 		ret = t4_i2c_rd(adapter, adapter->mbox, pi->lport,
 				I2C_DEV_ADDR_A0, SFF_8472_COMP_ADDR,
 				SFF_8472_COMP_LEN, &sff8472_comp);
@@ -1949,6 +1950,7 @@ static int cxgb4_get_module_info(struct net_device *dev,
 		break;
 
 	case FW_PORT_TYPE_QSFP:
+	case FW_PORT_TYPE_QSFP56:
 	case FW_PORT_TYPE_QSFP_10G:
 	case FW_PORT_TYPE_CR_QSFP:
 	case FW_PORT_TYPE_CR2_QSFP:

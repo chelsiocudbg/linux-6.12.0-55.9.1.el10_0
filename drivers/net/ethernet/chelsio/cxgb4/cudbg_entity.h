@@ -161,20 +161,23 @@ static const char * const cudbg_region[] = {
 	"Tx payload:", "Rx payload:", "LE hash:", "iSCSI region:",
 	"TDDP region:", "TPT region:", "STAG region:", "RQ region:",
 	"RQUDP region:", "PBL region:", "TXPBL region:",
-	"DBVFIFO region:", "ULPRX state:", "ULPTX state:",
+	"RRQ region:", "NVMe STAG region:",
+	"NVMe RQ region:", "NVMe RXPBL region:", "NVMe TPT region:",
+	"NVMe TXPBL region:", "DBVFIFO region:", "ULPRX state:",
+	"ULPTX state:", "RoCE RRQ region:",
 	"On-chip queues:"
 };
 
 /* Memory region info relative to current memory (i.e. wrt 0). */
 struct cudbg_region_info {
 	bool exist; /* Does region exists in current memory? */
-	u32 start;  /* Start wrt 0 */
-	u32 end;    /* End wrt 0 */
+	u64 start;  /* Start wrt 0 */
+	u64 end;    /* End wrt 0 */
 };
 
 struct cudbg_mem_desc {
-	u32 base;
-	u32 limit;
+	u64 base;
+	u64 limit;
 	u32 idx;
 };
 

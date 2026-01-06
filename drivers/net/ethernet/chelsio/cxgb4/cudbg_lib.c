@@ -211,19 +211,19 @@ do { \
          release_scratch_buff(scratch_buff, dbg_buff); \
  } while (0)
 
-void cudbg_tp_pio_read(struct cudbg_init *cudbg, u32 *buff, u32 nregs,
+static void cudbg_tp_pio_read(struct cudbg_init *cudbg, u32 *buff, u32 nregs,
                        u32 start_index, u8 sleep_ok)
 {
         t4_tp_pio_read(cudbg->adap, buff, nregs, start_index, sleep_ok);
 }
 
-void cudbg_tp_tm_pio_read(struct cudbg_init *cudbg, u32 *buff, u32 nregs,
+static void cudbg_tp_tm_pio_read(struct cudbg_init *cudbg, u32 *buff, u32 nregs,
                           u32 start_index, u8 sleep_ok)
 {
         t4_tp_tm_pio_read(cudbg->adap, buff, nregs, start_index, sleep_ok);
 }
 
-void cudbg_tp_mib_read(struct cudbg_init *cudbg, u32 *buff, u32 nregs,
+static void cudbg_tp_mib_read(struct cudbg_init *cudbg, u32 *buff, u32 nregs,
                        u32 start_index, u8 sleep_ok)
 {
         t4_tp_mib_read(cudbg->adap, buff, nregs, start_index, sleep_ok);
@@ -536,7 +536,7 @@ out:
 	return rc;
 }
 
-int is_fw_attached(struct cudbg_init *pdbg_init)
+static int is_fw_attached(struct cudbg_init *pdbg_init)
 {
 	struct adapter *padap = pdbg_init->adap;
 
@@ -600,9 +600,9 @@ static int cudbg_mem_desc_cmp(const void *a, const void *b)
 int cudbg_fill_meminfo(struct adapter *padap,
 		       struct cudbg_meminfo *meminfo_buff)
 {
+	u32 lo, hi, used, alloc, chip_ver, free_rx_cnt;
 	struct cudbg_mem_desc *md;
-	u32 lo, hi, used, alloc;
-	int n, i;
+	int i, n;
 
 	memset(meminfo_buff->avail, 0,
 	       ARRAY_SIZE(meminfo_buff->avail) *
@@ -611,6 +611,7 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	       (ARRAY_SIZE(cudbg_region) + 3) * sizeof(struct cudbg_mem_desc));
 	md  = meminfo_buff->mem;
 
+	chip_ver = CHELSIO_CHIP_VERSION(padap->params.chip);
 	for (i = 0; i < ARRAY_SIZE(meminfo_buff->mem); i++) {
 		meminfo_buff->mem[i].limit = 0;
 		meminfo_buff->mem[i].idx = i;
@@ -622,10 +623,10 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	if (lo & EDRAM0_ENABLE_F) {
 		hi = t4_read_reg(padap, MA_EDRAM0_BAR_A);
 		meminfo_buff->avail[i].base =
-			cudbg_mbytes_to_bytes(EDRAM0_BASE_G(hi));
+			cudbg_mbytes_to_bytes(T7_EDRAM0_BASE_G(hi));
 		meminfo_buff->avail[i].limit =
 			meminfo_buff->avail[i].base +
-			cudbg_mbytes_to_bytes(EDRAM0_SIZE_G(hi));
+			cudbg_mbytes_to_bytes(T7_EDRAM0_SIZE_G(hi));
 		meminfo_buff->avail[i].idx = 0;
 		i++;
 	}
@@ -633,57 +634,87 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	if (lo & EDRAM1_ENABLE_F) {
 		hi =  t4_read_reg(padap, MA_EDRAM1_BAR_A);
 		meminfo_buff->avail[i].base =
-			cudbg_mbytes_to_bytes(EDRAM1_BASE_G(hi));
+			cudbg_mbytes_to_bytes(T7_EDRAM1_BASE_G(hi));
 		meminfo_buff->avail[i].limit =
 			meminfo_buff->avail[i].base +
-			cudbg_mbytes_to_bytes(EDRAM1_SIZE_G(hi));
+			cudbg_mbytes_to_bytes(T7_EDRAM1_SIZE_G(hi));
 		meminfo_buff->avail[i].idx = 1;
 		i++;
 	}
 
-	if (is_t5(padap->params.chip)) {
-		if (lo & EXT_MEM0_ENABLE_F) {
-			hi = t4_read_reg(padap, MA_EXT_MEMORY0_BAR_A);
-			meminfo_buff->avail[i].base =
-				cudbg_mbytes_to_bytes(EXT_MEM_BASE_G(hi));
-			meminfo_buff->avail[i].limit =
-				meminfo_buff->avail[i].base +
-				cudbg_mbytes_to_bytes(EXT_MEM_SIZE_G(hi));
-			meminfo_buff->avail[i].idx = 3;
-			i++;
+	if (lo & EXT_MEM_ENABLE_F) {
+		switch (chip_ver) {
+			case CHELSIO_T4:
+			case CHELSIO_T6:
+				hi = t4_read_reg(padap, MA_EXT_MEMORY_BAR_A);
+				meminfo_buff->avail[i].base =
+					cudbg_mbytes_to_bytes(EXT_MEM_BASE_G(hi));
+				meminfo_buff->avail[i].limit =
+					meminfo_buff->avail[i].base +
+					cudbg_mbytes_to_bytes(EXT_MEM_SIZE_G(hi));
+				meminfo_buff->avail[i].idx = 2;
+				i++;
+				break;
+			default:
+				hi = t4_read_reg(padap, MA_EXT_MEMORY0_BAR_A);
+				meminfo_buff->avail[i].base = (u64)T7_EXT_MEM0_BASE_G(hi) << 20;
+				meminfo_buff->avail[i].limit =
+					meminfo_buff->avail[i].base +
+					((u64)T7_EXT_MEM0_SIZE_G(hi) << 20);
+				meminfo_buff->avail[i].idx = 3;
+				i++;
+				break;
 		}
+	}
 
-		if (lo & EXT_MEM1_ENABLE_F) {
-			hi = t4_read_reg(padap, MA_EXT_MEMORY1_BAR_A);
-			meminfo_buff->avail[i].base =
-				cudbg_mbytes_to_bytes(EXT_MEM1_BASE_G(hi));
-			meminfo_buff->avail[i].limit =
-				meminfo_buff->avail[i].base +
-				cudbg_mbytes_to_bytes(EXT_MEM1_SIZE_G(hi));
-			meminfo_buff->avail[i].idx = 4;
-			i++;
-		}
-	} else {
-		if (lo & EXT_MEM_ENABLE_F) {
-			hi = t4_read_reg(padap, MA_EXT_MEMORY_BAR_A);
-			meminfo_buff->avail[i].base =
-				cudbg_mbytes_to_bytes(EXT_MEM_BASE_G(hi));
-			meminfo_buff->avail[i].limit =
-				meminfo_buff->avail[i].base +
-				cudbg_mbytes_to_bytes(EXT_MEM_SIZE_G(hi));
-			meminfo_buff->avail[i].idx = 2;
-			i++;
-		}
+	if (lo & EXT_MEM1_ENABLE_F) {
+		switch (chip_ver) {
+			case CHELSIO_T4:
+			case CHELSIO_T6:
+				/* No support for mc1 */
+				break;
+			default:
+				/* No mc1 when split mode enabled */
+				if (lo & MC_SPLIT_F)
+					break;
 
-		if (lo & HMA_MUX_F) {
-			hi = t4_read_reg(padap, MA_EXT_MEMORY1_BAR_A);
-			meminfo_buff->avail[i].base =
-				cudbg_mbytes_to_bytes(EXT_MEM1_BASE_G(hi));
-			meminfo_buff->avail[i].limit =
-				meminfo_buff->avail[i].base +
-				cudbg_mbytes_to_bytes(EXT_MEM1_SIZE_G(hi));
-			meminfo_buff->avail[i].idx = 5;
-			i++;
+				hi = t4_read_reg(padap, MA_EXT_MEMORY1_BAR_A);
+				meminfo_buff->avail[i].base =
+					(u64)T7_EXT_MEM1_BASE_G(hi) << 20;
+				meminfo_buff->avail[i].limit =
+					meminfo_buff->avail[i].base +
+					((u64)T7_EXT_MEM1_SIZE_G(hi) << 20);
+				meminfo_buff->avail[i].idx = 4;
+				i++;
+				break;
+		}
+	}
+
+	if (lo & HMA_MUX_F) {
+		switch (chip_ver) {
+			case CHELSIO_T4:
+			case CHELSIO_T5:
+				/* No support for hma */
+				break;
+			case CHELSIO_T6:
+				hi = t4_read_reg(padap, MA_EXT_MEMORY1_BAR_A);
+				meminfo_buff->avail[i].base =
+					cudbg_mbytes_to_bytes(EXT_MEM1_BASE_G(hi));
+				meminfo_buff->avail[i].limit =
+					meminfo_buff->avail[i].base +
+					cudbg_mbytes_to_bytes(EXT_MEM1_SIZE_G(hi));
+				meminfo_buff->avail[i].idx = 5;
+				i++;
+				break;
+
+			default:
+				hi = t4_read_reg(padap, MA_HOST_MEMORY_BAR_A);
+				meminfo_buff->avail[i].base = (u64)HMATARGETBASE_G(hi) << 20;
+				meminfo_buff->avail[i].limit = meminfo_buff->avail[i].base +
+					((u64)T7_HMA_SIZE_G(hi) << 20);
+				meminfo_buff->avail[i].idx = 5;
+				i++;
+				break;
 		}
 	}
 
@@ -717,7 +748,7 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	md++;
 
 	if (t4_read_reg(padap, LE_DB_CONFIG_A) & HASHEN_F) {
-		if (CHELSIO_CHIP_VERSION(padap->params.chip) <= CHELSIO_T5) {
+		if (chip_ver <= CHELSIO_T5) {
 			hi = t4_read_reg(padap, LE_DB_TID_HASHBASE_A) / 4;
 			md->base = t4_read_reg(padap, LE_DB_HASH_TID_BASE_A);
 		} else {
@@ -733,8 +764,37 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	md++;
 
 #define ulp_region(reg) do { \
-	md->base = t4_read_reg(padap, ULP_ ## reg ## _LLIMIT_A);\
-	(md++)->limit = t4_read_reg(padap, ULP_ ## reg ## _ULIMIT_A);\
+       (md)->base = t4_read_reg(padap, ULP_ ## reg ## _LLIMIT_A); \
+       if (chip_ver >= CHELSIO_T7) { \
+               (md)->base = (u64)(md)->base << 4; \
+       } \
+       (md)->limit = t4_read_reg(padap, ULP_ ## reg ## _ULIMIT_A); \
+       if (chip_ver >= CHELSIO_T7) { \
+               (md)->limit = ((u64)((md)->limit + 1) << 4) - 1; \
+       } \
+       (md)++; \
+} while (0)
+
+#define ulp_region_hide(md) do { \
+       (md)->base = 0; \
+       (md)->idx = ARRAY_SIZE(cudbg_region); /* hide it */ \
+       (md)++; \
+} while (0)
+
+#define ulp_region_le_chip(reg, chip) do { \
+       if (chip_ver <= (chip)) { \
+               ulp_region(reg); \
+       } else { \
+               ulp_region_hide(md); \
+       } \
+} while (0)
+
+#define ulp_region_ge_chip(reg, chip) do { \
+       if (chip_ver >= (chip)) { \
+               ulp_region(reg); \
+       } else { \
+               ulp_region_hide(md); \
+       } \
 } while (0)
 
 	ulp_region(RX_ISCSI);
@@ -742,29 +802,37 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	ulp_region(TX_TPT);
 	ulp_region(RX_STAG);
 	ulp_region(RX_RQ);
-	ulp_region(RX_RQUDP);
+	ulp_region_le_chip(RX_RQUDP, CHELSIO_T6);
 	ulp_region(RX_PBL);
 	ulp_region(TX_PBL);
+	ulp_region_ge_chip(RX_RRQ, CHELSIO_T7);
+	ulp_region_ge_chip(RX_NVME_TCP_STAG, CHELSIO_T7);
+	ulp_region_ge_chip(RX_NVME_TCP_RQ, CHELSIO_T7);
+	ulp_region_ge_chip(RX_NVME_TCP_PBL, CHELSIO_T7);
+	ulp_region_ge_chip(TX_NVME_TCP_TPT, CHELSIO_T7);
+	ulp_region_ge_chip(TX_NVME_TCP_PBL, CHELSIO_T7);
+
+#undef ulp_region_ge_chip
+#undef ulp_region_le_chip
+#undef ulp_region_hide
 #undef ulp_region
-	md->base = 0;
-	md->idx = ARRAY_SIZE(cudbg_region);
+
 	if (!is_t4(padap->params.chip)) {
-		u32 fifo_size = t4_read_reg(padap, SGE_DBVFIFO_SIZE_A);
-		u32 sge_ctrl = t4_read_reg(padap, SGE_CONTROL2_A);
-		u32 size = 0;
-
+		md->base = t4_read_reg(padap, SGE_DBVFIFO_BADDR_A);
 		if (is_t5(padap->params.chip)) {
-			if (sge_ctrl & VFIFO_ENABLE_F)
-				size = DBVFIFO_SIZE_G(fifo_size);
-		} else {
-			size = T6_DBVFIFO_SIZE_G(fifo_size);
-		}
+			u32 sge_ctrl = t4_read_reg(padap, SGE_CONTROL2_A);
+			u32 size = 0;
 
-		if (size) {
-			md->base = BASEADDR_G(t4_read_reg(padap,
-							  SGE_DBVFIFO_BADDR_A));
-			md->limit = md->base + (size << 2) - 1;
+			if (sge_ctrl & VFIFO_ENABLE_F)
+				size = t4_read_reg(padap, SGE_DBVFIFO_SIZE_A) * 4;
+
+			md->limit = md->base + size - 1;
+		} else {
+			md->limit = 0;
 		}
+	} else {
+		md->base = 0;
+		md->idx = ARRAY_SIZE(cudbg_region);
 	}
 
 	md++;
@@ -776,6 +844,18 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	md->limit = 0;
 	md++;
 
+	if (chip_ver >= CHELSIO_T7) {
+		u32 roce_rrq_base = 0;
+
+		t4_tp_pio_read(padap, &roce_rrq_base, 1, TP_ROCE_RRQ_BASE_A,
+				true);
+		md->base = roce_rrq_base;
+		md->limit = 0;
+	} else {
+		md->base = 0;
+		md->idx = ARRAY_SIZE(cudbg_region); /* hide it*/
+	}
+	md++;
 
 	md->base = padap->uld_inst.vres.ocq.start;
 	if (padap->uld_inst.vres.ocq.size)
@@ -810,7 +890,7 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	meminfo_buff->up_extmem2_hi = hi;
 
 	lo = t4_read_reg(padap, TP_PMM_RX_MAX_PAGE_A);
-	for (i = 0, meminfo_buff->free_rx_cnt = 0; i < 2; i++)
+	for (i = 0, free_rx_cnt = 0; i < padap->params.arch.nchan; i++)
 		meminfo_buff->free_rx_cnt +=
 			FREERXPAGECOUNT_G(t4_read_reg(padap,
 						      TP_FLM_FREE_RX_CNT_A));
@@ -818,11 +898,11 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	meminfo_buff->rx_pages_data[0] =  PMRXMAXPAGE_G(lo);
 	meminfo_buff->rx_pages_data[1] =
 		t4_read_reg(padap, TP_PMM_RX_PAGE_SIZE_A) >> 10;
-	meminfo_buff->rx_pages_data[2] = (lo & PMRXNUMCHN_F) ? 2 : 1;
+	meminfo_buff->rx_pages_data[2] = padap->params.arch.nchan;
 
 	lo = t4_read_reg(padap, TP_PMM_TX_MAX_PAGE_A);
 	hi = t4_read_reg(padap, TP_PMM_TX_PAGE_SIZE_A);
-	for (i = 0, meminfo_buff->free_tx_cnt = 0; i < 4; i++)
+	for (i = 0, meminfo_buff->free_tx_cnt = 0; i < NCHAN; i++)
 		meminfo_buff->free_tx_cnt +=
 			FREETXPAGECOUNT_G(t4_read_reg(padap,
 						      TP_FLM_FREE_TX_CNT_A));
@@ -832,14 +912,14 @@ int cudbg_fill_meminfo(struct adapter *padap,
 		hi >= (1 << 20) ? (hi >> 20) : (hi >> 10);
 	meminfo_buff->tx_pages_data[2] =
 		hi >= (1 << 20) ? 'M' : 'K';
-	meminfo_buff->tx_pages_data[3] = 1 << PMTXNUMCHN_G(lo);
+	meminfo_buff->tx_pages_data[3] = 1 << NCHAN;
 
 	meminfo_buff->p_structs = t4_read_reg(padap, TP_CMM_MM_MAX_PSTRUCT_A);
 	meminfo_buff->p_structs_free_cnt =
 		FREEPSTRUCTCOUNT_G(t4_read_reg(padap, TP_FLM_FREE_PS_CNT_A));
 
 	for (i = 0; i < 4; i++) {
-		if (CHELSIO_CHIP_VERSION(padap->params.chip) > CHELSIO_T5)
+		if (chip_ver > CHELSIO_T5)
 			lo = t4_read_reg(padap,
 					 MPS_RX_MAC_BG_PG_CNT0_A + i * 4);
 		else
@@ -856,7 +936,7 @@ int cudbg_fill_meminfo(struct adapter *padap,
 	}
 
 	for (i = 0; i < padap->params.arch.nchan; i++) {
-		if (CHELSIO_CHIP_VERSION(padap->params.chip) > CHELSIO_T5)
+		if (chip_ver > CHELSIO_T5)
 			lo = t4_read_reg(padap,
 					 MPS_RX_LPBK_BG_PG_CNT0_A + i * 4);
 		else
@@ -1612,7 +1692,7 @@ static int cudbg_get_mem_region(struct adapter *padap,
  */
 static int cudbg_get_mem_relative(struct adapter *padap,
 				  struct cudbg_meminfo *meminfo,
-				  u8 mem_type, u32 *out_base, u32 *out_end)
+				  u8 mem_type, u64 *out_base, u64 *out_end)
 {
 	u8 mc_idx;
 	int rc;
@@ -3136,8 +3216,8 @@ static int cudbg_collect_tcam_index(struct cudbg_init *pdbg_init,
 	if (tcamx & tcamy)
 		return rc;
 
-	/* t7b changes MPS_T5_CLS_SRAM_H_A to indirect register */
-	if (is_t7b(padap->params.chip)) {
+	/* t7 changes MPS_T5_CLS_SRAM_H_A to indirect register */
+	if (is_t7(padap->params.chip)) {
 		u32 tmp_ctl = 0;
 
 		tmp_ctl |= SRAMWRN_V(0) |

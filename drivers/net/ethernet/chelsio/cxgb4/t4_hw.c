@@ -9273,7 +9273,7 @@ int t4_free_mac_filt(struct adapter *adap, unsigned int mbox,
 
         if (is_t4(adap->params.chip))
                 max_naddr =  NUM_MPS_CLS_SRAM_L_INSTANCES;
-        else if (is_t7b(adap->params.chip))
+        else if (is_t7(adap->params.chip))
 		/* In T7 there 3 TCAM each of 512 size*/
 		max_naddr = NUM_MPS_T5_CLS_SRAM_L_INSTANCES * 3;
         else
@@ -10389,7 +10389,7 @@ int t4_prep_adapter(struct adapter *adapter)
 	case CHELSIO_T7:
                 adapter->params.arch.sge_fl_db = 0;
                 adapter->params.arch.mps_tcam_size =
-                        is_t7b(adapter->params.chip)
+                        is_t7(adapter->params.chip)
 			/* In T7 there 3 TCAM each of 512 size*/
 			? NUM_MPS_T5_CLS_SRAM_L_INSTANCES * 3
                         : NUM_MPS_T5_CLS_SRAM_L_INSTANCES;

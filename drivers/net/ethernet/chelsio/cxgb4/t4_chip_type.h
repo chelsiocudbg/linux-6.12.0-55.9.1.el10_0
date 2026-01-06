@@ -94,16 +94,4 @@ static inline int is_t7(enum chip_type chip)
 {
 	return (CHELSIO_CHIP_VERSION(chip) == CHELSIO_T7);
 }
-
-static inline int is_t7a(enum chip_type chip)
-{
-	return ((CHELSIO_CHIP_VERSION(chip) == CHELSIO_T7) &&
-			(CHELSIO_CHIP_RELEASE(chip) == 0));
-}
-
-static inline int is_t7b(enum chip_type chip)
-{
-	return ((CHELSIO_CHIP_VERSION(chip) == CHELSIO_T7) &&
-			(CHELSIO_CHIP_RELEASE(chip) == 1));
-}
 #endif /* __T4_CHIP_TYPE_H__ */

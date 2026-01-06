@@ -1442,17 +1442,6 @@ static int cxgb_set_features(struct net_device *dev, netdev_features_t features)
 	return err;
 }
 
-static int setup_debugfs(struct adapter *adap)
-{
-	if (IS_ERR_OR_NULL(adap->debugfs_root))
-		return -1;
-
-#ifdef CONFIG_DEBUG_FS
-	t4_setup_debugfs(adap);
-#endif
-	return 0;
-}
-
 static void cxgb4_port_mirror_free_rxq(struct adapter *adap,
 				       struct sge_eth_rxq *mirror_rxq)
 {
@@ -3876,19 +3865,19 @@ static int adap_init0_tweaks(struct adapter *adapter)
 	if (CHELSIO_CHIP_VERSION(adapter->params.chip) >= CHELSIO_T6)
 		t4_set_reg_field(adapter, ULP_RX_MISC_FEATURE_ENABLE_A, ISCSI_ALL_CMP_MODE_F, ISCSI_ALL_CMP_MODE_F);
 
-	if ((CHELSIO_CHIP_VERSION(adapter->params.chip) >= CHELSIO_T7) &&
-			!is_t7a(adapter->params.chip)) {
+	if (CHELSIO_CHIP_VERSION(adapter->params.chip) >= CHELSIO_T7)
+	{
 		/* Enable CPL_NVMT_DATA and CPL_ISCSI_DATA delivery in IQE. */
 		t4_set_reg_field(adapter, SGE_CONTROL2_A,
-                                RXCPLMODE_ISCSI_F | RXCPLMODE_NVMT_F,
-                                RXCPLMODE_ISCSI_F | RXCPLMODE_NVMT_F);
+				RXCPLMODE_ISCSI_F | RXCPLMODE_NVMT_F,
+				RXCPLMODE_ISCSI_F | RXCPLMODE_NVMT_F);
 		/*
 		 * Enable CPL_RX_ISCSI_CMP delivery for iSCSI PDU
 		 * without payload and enable non-ddp bit in iSCSI DDP tag.
 		 */
 		t4_set_reg_field(adapter, ULP_RX_CTL1_A,
-                                ISCSI_CTL2_F | ISCSI_CTL0_F,
-                                ISCSI_CTL2_F | ISCSI_CTL0_F);
+				ISCSI_CTL2_F | ISCSI_CTL0_F,
+				ISCSI_CTL2_F | ISCSI_CTL0_F);
 	}
 
 	return 0;
@@ -6430,7 +6419,7 @@ fw_attach_fail:
 			adapter->name : pci_name(adapter->pdev.pci_dev);
 		adapter->debugfs_root = debugfs_create_dir(dir_name,
 							   cxgb4_debugfs_root);
-		setup_debugfs(adapter);
+		cxgb4_setup_debugfs(adapter);
 	}
 
 	if (cxgb4_uld_supported_any(adapter)) {

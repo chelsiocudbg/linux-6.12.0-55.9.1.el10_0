@@ -2809,14 +2809,12 @@ static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld, unsigned 
 	} else {
 		lld->iscsi_llimit = t4_read_reg(adap, ULP_RX_ISCSI_LLIMIT_A) << 4;
 
-		if (!is_t7a(adap->params.chip)) {
-			u32 val = t4_read_reg(adap, ULP_RX_CTL1_A);
-			lld->iscsi_non_ddp_bit = !!(val & ISCSI_CTL2_F);
+		u32 val = t4_read_reg(adap, ULP_RX_CTL1_A);
+		lld->iscsi_non_ddp_bit = !!(val & ISCSI_CTL2_F);
 
-			val = t4_read_reg(adap, SGE_CONTROL2_A);
-			lld->cpl_iscsi_data_iqe = !!(val & RXCPLMODE_ISCSI_F);
-			lld->cpl_nvmt_data_iqe = !!(val & RXCPLMODE_NVMT_F);
-		}
+		val = t4_read_reg(adap, SGE_CONTROL2_A);
+		lld->cpl_iscsi_data_iqe = !!(val & RXCPLMODE_ISCSI_F);
+		lld->cpl_nvmt_data_iqe = !!(val & RXCPLMODE_NVMT_F);
 	}
 
 	lld->max_pdu_size = MAXRXDATA_G(t4_read_reg(adap, TP_PARA_REG2_A));
