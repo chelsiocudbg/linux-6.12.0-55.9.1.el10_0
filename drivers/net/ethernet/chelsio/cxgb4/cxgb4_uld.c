@@ -2079,6 +2079,7 @@ static int cxgb4_uld_init_rdma(struct adapter *adap,
                }
 
                if (cxgb4_modparam_enable_ulds_supported(CXGB4_ULD_TYPE_CSTOR)) {
+		       adap->num_ofld_uld += 2;
                        cxgb4_uld_enable(adap, CXGB4_ULD_TYPE_CSTOR);
                        divide_resources = true;
                }
@@ -2488,18 +2489,22 @@ setup_sge_queues_uld(struct adapter *adap, unsigned int uld_type, bool lro)
 	if (ret)
 		return ret;
 
-	/* Tell uP to route control queue completions to rdma rspq */
-	if (adap->flags & CXGB4_FULL_INIT_DONE && uld_type == CXGB4_ULD_RDMA) {
+	/* Tell uP to route control queue completions to rdma or cstor rspq */
+	if (adap->flags & CXGB4_FULL_INIT_DONE &&
+	    (uld_type == CXGB4_ULD_RDMA || uld_type == CXGB4_ULD_TYPE_CSTOR)) {
 		struct sge *s = &adap->sge;
 		unsigned int cmplqid;
 		int i, j, k;
-		u32 param, cmdop;
+		u32 param, cmdop, ctrlq_start = 0;
+
+		if (uld_type == CXGB4_ULD_TYPE_CSTOR)
+			ctrlq_start = CXGB4_ULD_CTRLQ_INDEX_CSTOR;
 
 		cmdop = FW_PARAMS_PARAM_DMAQ_EQ_CMPLIQID_CTRL;
 		for_each_port(adap, i) {
 			cmplqid = rxq_info->uldrxq[i].rspq.cntxt_id;
 
-			j = i * adap->params.num_up_cores;
+			j = ctrlq_start + i * adap->params.num_up_cores;
 			for (k = 0; k < adap->params.num_up_cores; k++, j++) {
 				param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DMAQ) |
 					 FW_PARAMS_PARAM_X_V(cmdop) |
@@ -2805,6 +2810,12 @@ static void uld_init(struct adapter *adap, struct cxgb4_lld_info *lld, unsigned 
 		lld->nrxq = rxq_info->nrxq;
 		lld->nciq = rxq_info->nciq;
 		lld->ctrlq_start = CXGB4_ULD_CTRLQ_INDEX_RDMA;
+	} else if (uld == CXGB4_ULD_TYPE_CSTOR) {
+		lld->rxq_ids = rxq_info->rspq_id;
+		lld->ciq_ids = rxq_info->rspq_id + rxq_info->nrxq;
+		lld->nrxq = rxq_info->nrxq;
+		lld->nciq = rxq_info->nciq;
+		lld->ctrlq_start = CXGB4_ULD_CTRLQ_INDEX_CSTOR;
 	}
 	lld->nchan = adap->params.nports;
 	lld->nports = adap->params.nports;

@@ -675,6 +675,8 @@ enum {
 	MAX_CTRL_QUEUES = CXGB4_ULD_CTRLQ_INDEX_MAX, /* # of ULD control Tx queues */
 	MAX_RDMA_QUEUES = NCHAN,      /* # of streaming RDMA Rx queues */
 	MAX_RDMA_CIQS = 32,           /* # of RDMA concentrator IQs */
+	MAX_CSTOR_QUEUES = NCHAN,     /* # of CSTOR Rx queues */
+	MAX_CSTOR_CIQS = 32,          /* # of CSTOR concentrator IQs */
 	MAX_CSTOR_USPACE_RXQ = 32,    /* # of CSTOR user space Rx queues */
 };
 

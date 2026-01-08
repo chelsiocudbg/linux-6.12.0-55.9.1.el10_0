@@ -1271,6 +1271,26 @@ static int setup_sge_queues(struct adapter *adap)
 		}
 	}
 
+	if (cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_CSTOR)) {
+		rxq_info = s->uld_rxq_info[CXGB4_ULD_TYPE_CSTOR];
+		cmplqid = 0;
+
+		for_each_port(adap, i) {
+			/* Note that cmplqid below is 0 if we don't have CSTOR queues. */
+			if (rxq_info)
+				cmplqid	= rxq_info->uldrxq[i].rspq.cntxt_id;
+
+			/* Allocate at least num_up_cores control queues per port */
+			j = CXGB4_ULD_CTRLQ_INDEX_CSTOR + i * adap->params.num_up_cores;
+			for (k = 0; k < adap->params.num_up_cores; k++, j++) {
+				err = t4_sge_alloc_ctrl_txq(adap, &s->ctrlq[j], adap->port[i],
+							    s->fw_evtq.cntxt_id, cmplqid, k);
+				if (err)
+					goto freeout;
+			}
+		}
+	}
+
 	if (!is_t4(adap->params.chip)) {
 		err = t4_sge_alloc_eth_txq(adap, &s->ptptxq, adap->port[0],
 					   netdev_get_tx_queue(adap->port[0], 0)
