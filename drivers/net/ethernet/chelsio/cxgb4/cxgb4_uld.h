@@ -607,6 +607,9 @@ unsigned int cxgb4_best_aligned_mtu(const unsigned short *mtus,
 				    unsigned int *mtu_idxp);
 void cxgb4_get_tcp_stats(struct pci_dev *pdev, struct tp_tcp_stats *v4,
 			 struct tp_tcp_stats *v6);
+int cxgb4_wr_mbox(struct net_device *dev, const void *cmd, int size, void *rpl);
+int cxgb4_set_params(struct net_device *dev, unsigned int nparams,
+		     const u32 *params, const u32 *val);
 void cxgb4_iscsi_init(struct net_device *dev, unsigned int tag_mask,
 		      const unsigned int *pgsz_order);
 struct sk_buff *cxgb4_pktgl_to_skb(const struct pkt_gl *gl,
@@ -624,6 +627,7 @@ int cxgb4_bar2_sge_qregs(struct net_device *dev,
 			 u64 *pbar2_qoffset,
 			 unsigned int *pbar2_qid);
 u16 cxgb4_uld_xfrm_ipsecidx_get(struct xfrm_state *xfrm);
+void cxgb4_fatal_err(struct net_device *dev);
 
 struct resource *cxgb4_bar_resource(struct net_device *dev, u8 index);
 

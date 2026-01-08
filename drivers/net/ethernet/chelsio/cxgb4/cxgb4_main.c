@@ -1959,6 +1959,15 @@ void cxgb4_iscsi_init(struct net_device *dev, unsigned int tag_mask,
 }
 EXPORT_SYMBOL(cxgb4_iscsi_init);
 
+int cxgb4_wr_mbox(struct net_device *dev, const void *cmd,
+		  int size, void *rpl)
+{
+	struct adapter *adap = netdev2adap(dev);
+
+	return t4_wr_mbox(adap, adap->mbox, cmd, size, rpl);
+}
+EXPORT_SYMBOL(cxgb4_wr_mbox);
+
 int cxgb4_flush_eq_cache(struct net_device *dev)
 {
 	struct adapter *adap = netdev2adap(dev);
@@ -2262,6 +2271,17 @@ void t4_db_dropped(struct adapter *adap)
 	cxgb4_work_queue(adap->workq, &adap->db_drop_task);
 }
 
+
+int cxgb4_set_params(struct net_device *dev, unsigned int nparams,
+		     const u32 *params, const u32 *val)
+{
+	struct adapter *adap;
+
+	adap = netdev2adap(dev);
+	return t4_set_params(adap, adap->mbox, adap->pf, 0, nparams, params,
+			     val);
+}
+EXPORT_SYMBOL(cxgb4_set_params);
 
 #if IS_ENABLED(CONFIG_IPV6)
 u64 cxgb4_read_sge_timestamp(struct net_device *dev)
@@ -3517,6 +3537,12 @@ void t4_fatal_err(struct adapter *adap)
 	dev_alert(adap->pdev_dev, "encountered fatal error, adapter stopped\n");
 	cxgb4_work_queue(adap->workq, &adap->fatal_err_notify_task);
 }
+
+void cxgb4_fatal_err(struct net_device *dev)
+{
+	t4_fatal_err(netdev2adap(dev));
+}
+EXPORT_SYMBOL(cxgb4_fatal_err);
 
 /* HMA Definitions */
 

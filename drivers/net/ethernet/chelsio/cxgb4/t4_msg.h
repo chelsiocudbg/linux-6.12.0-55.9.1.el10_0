@@ -108,6 +108,7 @@ enum {
 	CPL_TRACE_PKT         = 0xB0,
 	CPL_TLS_DATA          = 0xB1,
 	CPL_ISCSI_DATA	      = 0xB2,
+	CPL_NVMT_CMP          = 0xB5,
 
 	CPL_FW4_MSG           = 0xC0,
 	CPL_FW4_PLD           = 0xC1,
@@ -179,6 +180,7 @@ enum {
 	ULP_MODE_TCPDDP	       = 5,
 	ULP_MODE_FCOE          = 6,
 	ULP_MODE_TLS           = 8,
+	ULP_MODE_NVMET         = 11,
 };
 
 enum {
@@ -304,6 +306,14 @@ struct work_request_hdr {
 #define KEEP_ALIVE_S    54
 #define KEEP_ALIVE_V(x) ((__u64)(x) << KEEP_ALIVE_S)
 #define KEEP_ALIVE_F    KEEP_ALIVE_V(1ULL)
+
+#define MAX_RT_S    55
+#define MAX_RT_M    0xF
+#define MAX_RT_V(x) ((__u64)(x) << MAX_RT_S)
+
+#define MAX_RT_OVERRIDE_S    59
+#define MAX_RT_OVERRIDE_V(x) ((__u64)(x) << MAX_RT_OVERRIDE_S)
+#define MAX_RT_OVERRIDE_F    MAX_RT_OVERRIDE_V(1ULL)
 
 #define MSS_IDX_S    60
 #define MSS_IDX_M    0xF
@@ -1452,6 +1462,25 @@ struct cpl_smt_write_rpl {
 #define SMTW_NORPL_V(x)	((x) << SMTW_NORPL_S)
 #define SMTW_NORPL_F	SMTW_NORPL_V(1U)
 
+struct cpl_rdma_cqe_err {
+	union opcode_tid ot;
+	__be32 tid_flitcnt;
+	__be32 qpid_to_wr_type;
+	__be32 length;
+	__be32 tag;
+	__be32 msn;
+};
+
+#define CPL_RDMA_CQE_ERR_QPID_S		12
+#define CPL_RDMA_CQE_ERR_QPID_M		0xfffff
+#define CPL_RDMA_CQE_ERR_QPID_G(x)	\
+    (((x) >> CPL_RDMA_CQE_ERR_QPID_S) & CPL_RDMA_CQE_ERR_QPID_M)
+
+#define CPL_RDMA_CQE_ERR_STATUS_S	5
+#define CPL_RDMA_CQE_ERR_STATUS_M	0x1f
+#define CPL_RDMA_CQE_ERR_STATUS_G(x)	\
+    (((x) >> CPL_RDMA_CQE_ERR_STATUS_S) & CPL_RDMA_CQE_ERR_STATUS_M)
+
 struct cpl_set_le_req {
         WR_HDR;
         union opcode_tid ot;
@@ -1680,6 +1709,9 @@ struct cpl_tx_data {
 };
 
 /* cpl_tx_data.flags field */
+#define TX_ULP_SUBMODE_S    6
+#define TX_ULP_SUBMODE_V(x) ((x) << TX_ULP_SUBMODE_S)
+
 #define TX_FORCE_S	13
 #define TX_FORCE_V(x)	((x) << TX_FORCE_S)
 
@@ -2000,6 +2032,9 @@ struct ulp_mem_io {
 /* ulp_mem_io.dlen fields */
 #define ULP_MEMIO_DATA_LEN_S    0
 #define ULP_MEMIO_DATA_LEN_V(x) ((x) << ULP_MEMIO_DATA_LEN_S)
+
+#define T7_ULP_MEMIO_DATA_LEN_S    0
+#define T7_ULP_MEMIO_DATA_LEN_V(x) ((x) << T7_ULP_MEMIO_DATA_LEN_S)
 
 #define ULPTX_NSGE_S    0
 #define ULPTX_NSGE_M    0xFFFF
@@ -2571,4 +2606,14 @@ struct cpl_rx_tls_cmp {
 #define CPL_RX_TLS_CMP_LENGTH_V(x)      ((x) << CPL_RX_TLS_CMP_LENGTH_S)
 #define CPL_RX_TLS_CMP_LENGTH_G(x)      \
 	(((x) >> CPL_RX_TLS_CMP_LENGTH_S) & CPL_RX_TLS_CMP_LENGTH_M)
+
+struct cpl_nvmt_cmp {
+	union opcode_tid ot;
+	__be16 crch;
+	__be16 length;
+	__be32 seq;
+	__u8   t10status;
+	__u8   status;
+	__be16 crcl;
+};
 #endif  /* __T4_MSG_H */
