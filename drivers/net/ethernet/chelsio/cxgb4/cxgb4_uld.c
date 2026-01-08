@@ -1949,6 +1949,7 @@ static int cxgb4_uld_init_toe(struct adapter *adap,
                        adap->params.tid_qid_sel_shift = 0;
        }
 
+       adap->num_ofld_uld += 1;
        cxgb4_uld_enable(adap, CXGB4_ULD_TYPE_TOE);
        cxgb4_uld_enable(adap, CXGB4_ULD_TYPE_CHTCP);
        return 0;
@@ -2061,6 +2062,7 @@ static int cxgb4_uld_init_rdma(struct adapter *adap,
        if (!ret && val[0] != 0)
                adap->params.write_cmpl_support = 1;
 
+       adap->num_ofld_uld += 2;
        cxgb4_uld_enable(adap, CXGB4_ULD_RDMA);
 
        if (caps_cmd->nvmecaps) {
@@ -2138,6 +2140,7 @@ static int cxgb4_uld_init_iscsi(struct adapter *adap,
                }
        }
 
+       adap->num_ofld_uld += 2;
        cxgb4_uld_enable(adap, CXGB4_ULD_ISCSI);
        cxgb4_uld_enable(adap, CXGB4_ULD_ISCSIT);
        return 0;
@@ -2158,6 +2161,7 @@ static int cxgb4_uld_init_crypto(struct adapter *adap,
        u32 params[7], val[7];
        unsigned int chip_ver;
        int ret;
+       u8 num_ofld_uld = 0, num_uld = 0;
 
        chip_ver = CHELSIO_CHIP_VERSION(adap->params.chip);
 
@@ -2171,6 +2175,8 @@ static int cxgb4_uld_init_crypto(struct adapter *adap,
                } else {
                        adap->uld_inst.vres.ncrypto_fc = val[0];
                }
+
+	       num_ofld_uld = 1;
        }
 
        if (cryptocaps & FW_CAPS_CONFIG_TLS_INLINE) {
@@ -2184,6 +2190,8 @@ static int cxgb4_uld_init_crypto(struct adapter *adap,
                adap->uld_inst.vres.key.size = val[1] - val[0] + 1;
                dev_info(adap->pdev_dev, "crypto_caps: key start:%x end:%x\n",
                         val[0], val[1]);
+
+	       num_uld = 1;
        }
 
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
@@ -2215,6 +2223,8 @@ static int cxgb4_uld_init_crypto(struct adapter *adap,
 
        adap->params.crypto = cryptocaps;
 
+       adap->num_uld += num_uld;
+       adap->num_ofld_uld += num_ofld_uld;
        cxgb4_uld_enable(adap, CXGB4_ULD_CRYPTO);
        return 0;
 
