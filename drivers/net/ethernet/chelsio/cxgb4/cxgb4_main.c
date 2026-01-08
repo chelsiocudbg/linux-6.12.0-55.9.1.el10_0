@@ -1205,9 +1205,6 @@ static int setup_sge_queues(struct adapter *adap)
 	unsigned int cmplqid = 0;
 	int err, i, j, k, msix = 0;
 
-	if (is_uld(adap))
-		rxq_info = s->uld_rxq_info[CXGB4_ULD_RDMA];
-
 	if (!(adap->flags & CXGB4_USING_INTR_MULTI))
 		msix = -((int)s->intrq.abs_id + 1);
 
@@ -1253,20 +1250,24 @@ static int setup_sge_queues(struct adapter *adap)
 		}
 	}
 
-	for_each_port(adap, i) {
-		/* Note that cmplqid below is 0 if we don't
-		 * have RDMA queues, and that's the right value.
-		 */
-		if (rxq_info)
-			cmplqid	= rxq_info->uldrxq[i].rspq.cntxt_id;
+	if (cxgb4_uld_supported(adap, CXGB4_ULD_RDMA)) {
+		rxq_info = s->uld_rxq_info[CXGB4_ULD_RDMA];
 
-		/* Allocate at least num_up_cores control queues per port */
-		j = i * adap->params.num_up_cores;
-		for (k = 0; k < adap->params.num_up_cores; k++, j++) {
-			err = t4_sge_alloc_ctrl_txq(adap, &s->ctrlq[j], adap->port[i],
-						    s->fw_evtq.cntxt_id, cmplqid, k);
-			if (err)
-				goto freeout;
+		for_each_port(adap, i) {
+			/* Note that cmplqid below is 0 if we don't
+			 * have RDMA queues, and that's the right value.
+			 */
+			if (rxq_info)
+				cmplqid	= rxq_info->uldrxq[i].rspq.cntxt_id;
+
+			/* Allocate at least num_up_cores control queues per port */
+			j = i * adap->params.num_up_cores;
+			for (k = 0; k < adap->params.num_up_cores; k++, j++) {
+				err = t4_sge_alloc_ctrl_txq(adap, &s->ctrlq[j], adap->port[i],
+							    s->fw_evtq.cntxt_id, cmplqid, k);
+				if (err)
+					goto freeout;
+			}
 		}
 	}
 

@@ -2472,7 +2472,7 @@ static int
 setup_sge_queues_uld(struct adapter *adap, unsigned int uld_type, bool lro)
 {
 	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
-	int i, ret;
+	int ret;
 
 	ret = alloc_uld_rxqs(adap, rxq_info, lro);
 	if (ret)
@@ -2482,16 +2482,21 @@ setup_sge_queues_uld(struct adapter *adap, unsigned int uld_type, bool lro)
 	if (adap->flags & CXGB4_FULL_INIT_DONE && uld_type == CXGB4_ULD_RDMA) {
 		struct sge *s = &adap->sge;
 		unsigned int cmplqid;
+		int i, j, k;
 		u32 param, cmdop;
 
 		cmdop = FW_PARAMS_PARAM_DMAQ_EQ_CMPLIQID_CTRL;
 		for_each_port(adap, i) {
 			cmplqid = rxq_info->uldrxq[i].rspq.cntxt_id;
-			param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DMAQ) |
-				 FW_PARAMS_PARAM_X_V(cmdop) |
-				 FW_PARAMS_PARAM_YZ_V(s->ctrlq[i].q.cntxt_id));
-			ret = t4_set_params(adap, adap->mbox, adap->pf,
-					    0, 1, &param, &cmplqid);
+
+			j = i * adap->params.num_up_cores;
+			for (k = 0; k < adap->params.num_up_cores; k++, j++) {
+				param = (FW_PARAMS_MNEM_V(FW_PARAMS_MNEM_DMAQ) |
+					 FW_PARAMS_PARAM_X_V(cmdop) |
+					 FW_PARAMS_PARAM_YZ_V(s->ctrlq[j].q.cntxt_id));
+				ret = t4_set_params(adap, adap->mbox, adap->pf, 0, 1,
+						    &param, &cmplqid);
+			}
 		}
 	}
 	return ret;
