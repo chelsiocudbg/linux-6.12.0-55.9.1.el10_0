@@ -59,6 +59,7 @@
 
 #include "cxgb4.h"
 #include "cxgb4_uld.h"
+#include "cxgb4_rdma_resource.h"
 #include "l2t.h"
 #include <rdma/cxgb4-abi.h>
 
@@ -81,35 +82,10 @@ static inline void *cplhdr(struct sk_buff *skb)
 	return skb->data;
 }
 
-#define C4IW_ID_TABLE_F_RANDOM 1       /* Pseudo-randomize the id's returned */
-#define C4IW_ID_TABLE_F_EMPTY  2       /* Table is initially empty */
-
-struct c4iw_id_table {
-	u32 flags;
-	u32 start;              /* logical minimal id */
-	u32 last;               /* hint for find */
-	u32 max;
-	spinlock_t lock;
-	unsigned long *table;
-};
-
 struct c4iw_resource {
-	struct c4iw_id_table tpt_table;
-	struct c4iw_id_table qid_table;
-	struct c4iw_id_table pdid_table;
-	struct c4iw_id_table srq_table;
-};
-
-struct c4iw_qid_list {
-	struct list_head entry;
-	u32 qid;
-};
-
-struct c4iw_dev_ucontext {
-	struct list_head qpids;
-	struct list_head cqids;
-	struct mutex lock;
-	struct kref kref;
+	struct cxgb4_id_table tpt_table;
+	struct cxgb4_id_table pdid_table;
+	struct cxgb4_id_table srq_table;
 };
 
 enum c4iw_rdev_flags {
@@ -117,23 +93,11 @@ enum c4iw_rdev_flags {
 	T4_STATUS_PAGE_DISABLED = (1<<1),
 };
 
-struct c4iw_stat {
-	u64 total;
-	u64 cur;
-	u64 max;
-	u64 fail;
-};
-
 struct c4iw_stats {
 	struct mutex lock;
-	struct c4iw_stat qid;
-	struct c4iw_stat pd;
-	struct c4iw_stat stag;
-	struct c4iw_stat pbl;
-	struct c4iw_stat rqt;
-	struct c4iw_stat srqt;
-	struct c4iw_stat srq;
-	struct c4iw_stat ocqp;
+	struct cxgb4_rdma_stat stag;
+	struct cxgb4_rdma_stat pbl;
+	struct cxgb4_rdma_stat ocqp;
 	u64  db_full;
 	u64  db_empty;
 	u64  db_drop;
@@ -170,11 +134,9 @@ struct wr_log_entry {
 
 struct c4iw_rdev {
 	struct c4iw_resource resource;
-	u32 qpmask;
-	u32 cqmask;
-	struct c4iw_dev_ucontext uctx;
+	struct cxgb4_rdma_resource *rdma_res;
+	struct cxgb4_dev_ucontext uctx;
 	struct gen_pool *pbl_pool;
-	struct gen_pool *rqt_pool;
 	struct gen_pool *ocqp_pool;
 	u32 flags;
 	struct cxgb4_lld_info lldi;
@@ -520,7 +482,7 @@ static inline struct c4iw_srq *to_c4iw_srq(struct ib_srq *ibsrq)
 
 struct c4iw_ucontext {
 	struct ib_ucontext ibucontext;
-	struct c4iw_dev_ucontext uctx;
+	struct cxgb4_dev_ucontext uctx;
 	u32 key;
 	spinlock_t mmap_lock;
 	struct list_head mmaps;
@@ -959,35 +921,19 @@ static inline int ocqp_supported(const struct cxgb4_lld_info *infop)
 #endif
 }
 
-u32 c4iw_id_alloc(struct c4iw_id_table *alloc);
-void c4iw_id_free(struct c4iw_id_table *alloc, u32 obj);
-int c4iw_id_table_alloc(struct c4iw_id_table *alloc, u32 start, u32 num,
-			u32 reserved, u32 flags);
-void c4iw_id_table_free(struct c4iw_id_table *alloc);
-
 typedef int (*c4iw_handler_func)(struct c4iw_dev *dev, struct sk_buff *skb);
 
-void c4iw_put_qpid(struct c4iw_rdev *rdev, u32 qpid,
-		   struct c4iw_dev_ucontext *uctx);
-u32 c4iw_get_resource(struct c4iw_id_table *id_table);
-void c4iw_put_resource(struct c4iw_id_table *id_table, u32 entry);
-int c4iw_init_resource(struct c4iw_rdev *rdev, u32 nr_tpt,
-		       u32 nr_pdid, u32 nr_srqt);
+int c4iw_init_resource(struct c4iw_rdev *rdev, u32 nr_tpt);
 int c4iw_pblpool_create(struct c4iw_rdev *rdev);
-int c4iw_rqtpool_create(struct c4iw_rdev *rdev);
 int c4iw_ocqp_pool_create(struct c4iw_rdev *rdev);
 void c4iw_pblpool_destroy(struct c4iw_rdev *rdev);
 void c4iw_rqtpool_destroy(struct c4iw_rdev *rdev);
 void c4iw_ocqp_pool_destroy(struct c4iw_rdev *rdev);
-void c4iw_destroy_resource(struct c4iw_resource *rscp);
+void c4iw_destroy_resource(struct c4iw_rdev *rdev);
 void c4iw_register_device(struct work_struct *work);
 void c4iw_unregister_device(struct c4iw_dev *dev);
 int __init c4iw_cm_init(void);
 void c4iw_cm_term(void);
-void c4iw_release_dev_ucontext(struct c4iw_rdev *rdev,
-			       struct c4iw_dev_ucontext *uctx);
-void c4iw_init_dev_ucontext(struct c4iw_rdev *rdev,
-			    struct c4iw_dev_ucontext *uctx);
 int c4iw_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc);
 int c4iw_post_send(struct ib_qp *ibqp, const struct ib_send_wr *wr,
 		   const struct ib_send_wr **bad_wr);
@@ -1039,12 +985,6 @@ int c4iw_ep_disconnect(struct c4iw_ep *ep, int abrupt, gfp_t gfp);
 int c4iw_flush_rq(struct t4_wq *wq, struct t4_cq *cq, int count);
 int c4iw_flush_sq(struct c4iw_qp *qhp);
 int c4iw_ev_handler(struct c4iw_dev *rnicp, u32 qid);
-u32 c4iw_get_cqid(struct c4iw_rdev *rdev, struct c4iw_dev_ucontext *uctx);
-void c4iw_put_cqid(struct c4iw_rdev *rdev, u32 qid,
-		struct c4iw_dev_ucontext *uctx);
-u32 c4iw_get_qpid(struct c4iw_rdev *rdev, struct c4iw_dev_ucontext *uctx);
-void c4iw_put_qpid(struct c4iw_rdev *rdev, u32 qid,
-		struct c4iw_dev_ucontext *uctx);
 void c4iw_ev_dispatch(struct c4iw_dev *dev, struct t4_cqe *err_cqe);
 
 extern struct cxgb4_client t4c_client;
@@ -1052,8 +992,6 @@ extern c4iw_handler_func c4iw_handlers[NUM_CPL_CMDS];
 void __iomem *c4iw_bar2_addrs(struct c4iw_rdev *rdev, unsigned int qid,
 			      enum cxgb4_bar2_qtype qtype,
 			      unsigned int *pbar2_qid, u64 *pbar2_pa);
-int c4iw_alloc_srq_idx(struct c4iw_rdev *rdev);
-void c4iw_free_srq_idx(struct c4iw_rdev *rdev, int idx);
 extern void c4iw_log_wr_stats(struct t4_wq *wq, struct t4_cqe *cqe);
 extern int c4iw_wr_log;
 extern int db_fc_threshold;

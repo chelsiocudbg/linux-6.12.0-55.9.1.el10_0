@@ -122,7 +122,7 @@ static int alloc_sq(struct c4iw_rdev *rdev, struct t4_sq *sq, int user)
 }
 
 static int destroy_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
-		      struct c4iw_dev_ucontext *uctx, int has_rq)
+		      struct cxgb4_dev_ucontext *uctx, int has_rq)
 {
 	/*
 	 * uP clears EQ contexts when the connection exits rdma mode,
@@ -130,7 +130,7 @@ static int destroy_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 	 */
 	dealloc_sq(rdev, &wq->sq);
 	kfree(wq->sq.sw_sq);
-	c4iw_put_qpid(rdev, wq->sq.qid, uctx);
+	cxgb4_uld_put_qpid(uctx, wq->sq.qid);
 
 	if (has_rq) {
 		dma_free_coherent(&rdev->lldi.pdev->dev,
@@ -138,7 +138,7 @@ static int destroy_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 				  dma_unmap_addr(&wq->rq, mapping));
 		c4iw_rqtpool_free(rdev, wq->rq.rqt_hwaddr, wq->rq.rqt_size);
 		kfree(wq->rq.sw_rq);
-		c4iw_put_qpid(rdev, wq->rq.qid, uctx);
+		cxgb4_uld_put_qpid(uctx, wq->rq.qid);
 	}
 	return 0;
 }
@@ -172,7 +172,7 @@ void __iomem *c4iw_bar2_addrs(struct c4iw_rdev *rdev, unsigned int qid,
 
 static int create_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 		     struct t4_cq *rcq, struct t4_cq *scq,
-		     struct c4iw_dev_ucontext *uctx,
+		     struct cxgb4_dev_ucontext *uctx,
 		     struct c4iw_wr_wait *wr_waitp,
 		     int need_rq)
 {
@@ -184,12 +184,12 @@ static int create_qp(struct c4iw_rdev *rdev, struct t4_wq *wq,
 	int ret = 0;
 	int eqsize;
 
-	wq->sq.qid = c4iw_get_qpid(rdev, uctx);
+	wq->sq.qid = cxgb4_uld_get_qpid(rdev->rdma_res, uctx);
 	if (!wq->sq.qid)
 		return -ENOMEM;
 
 	if (need_rq) {
-		wq->rq.qid = c4iw_get_qpid(rdev, uctx);
+		wq->rq.qid = cxgb4_uld_get_qpid(rdev->rdma_res, uctx);
 		if (!wq->rq.qid) {
 			ret = -ENOMEM;
 			goto free_sq_qid;
@@ -379,9 +379,9 @@ free_sw_sq:
 	kfree(wq->sq.sw_sq);
 free_rq_qid:
 	if (need_rq)
-		c4iw_put_qpid(rdev, wq->rq.qid, uctx);
+		cxgb4_uld_put_qpid(uctx, wq->rq.qid);
 free_sq_qid:
-	c4iw_put_qpid(rdev, wq->sq.qid, uctx);
+	cxgb4_uld_put_qpid(uctx, wq->sq.qid);
 	return ret;
 }
 
@@ -2224,7 +2224,7 @@ int c4iw_create_qp(struct ib_qp *qp, struct ib_qp_init_attr *attrs,
 		}
 		if (rhp->rdev.lldi.write_w_imm_support)
 			uresp.flags |= C4IW_QPF_WRITE_W_IMM;
-		uresp.qid_mask = rhp->rdev.qpmask;
+		uresp.qid_mask = rhp->rdev.rdma_res->qpmask;
 		uresp.sqid = qhp->wq.sq.qid;
 		uresp.sq_size = qhp->wq.sq.size;
 		uresp.sq_memsize = qhp->wq.sq.memsize;
@@ -2463,7 +2463,7 @@ int c4iw_ib_query_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 	return 0;
 }
 
-static void free_srq_queue(struct c4iw_srq *srq, struct c4iw_dev_ucontext *uctx,
+static void free_srq_queue(struct c4iw_srq *srq, struct cxgb4_dev_ucontext *uctx,
 			   struct c4iw_wr_wait *wr_waitp)
 {
 	struct c4iw_rdev *rdev = &srq->rhp->rdev;
@@ -2497,10 +2497,10 @@ static void free_srq_queue(struct c4iw_srq *srq, struct c4iw_dev_ucontext *uctx,
 			dma_unmap_addr(wq, mapping));
 	c4iw_rqtpool_free(rdev, wq->rqt_hwaddr, wq->rqt_size);
 	kfree(wq->sw_rq);
-	c4iw_put_qpid(rdev, wq->qid, uctx);
+	cxgb4_uld_put_qpid(uctx, wq->qid);
 }
 
-static int alloc_srq_queue(struct c4iw_srq *srq, struct c4iw_dev_ucontext *uctx,
+static int alloc_srq_queue(struct c4iw_srq *srq, struct cxgb4_dev_ucontext *uctx,
 			   struct c4iw_wr_wait *wr_waitp)
 {
 	struct c4iw_rdev *rdev = &srq->rhp->rdev;
@@ -2513,7 +2513,7 @@ static int alloc_srq_queue(struct c4iw_srq *srq, struct c4iw_dev_ucontext *uctx,
 	int eqsize;
 	int ret = -ENOMEM;
 
-	wq->qid = c4iw_get_qpid(rdev, uctx);
+	wq->qid = cxgb4_uld_get_qpid(rdev->rdma_res, uctx);
 	if (!wq->qid)
 		goto err;
 
@@ -2630,7 +2630,7 @@ err_free_sw_rq:
 	if (!user)
 		kfree(wq->sw_rq);
 err_put_qpid:
-	c4iw_put_qpid(rdev, wq->qid, uctx);
+	cxgb4_uld_put_qpid(uctx, wq->qid);
 err:
 	return ret;
 }
@@ -2694,7 +2694,7 @@ int c4iw_create_srq(struct ib_srq *ib_srq, struct ib_srq_init_attr *attrs,
 	if (!srq->wr_waitp)
 		return -ENOMEM;
 
-	srq->idx = c4iw_alloc_srq_idx(&rhp->rdev);
+	srq->idx = cxgb4_uld_alloc_srq_idx(rhp->rdev.rdma_res);
 	if (srq->idx < 0) {
 		ret = -ENOMEM;
 		goto err_free_wr_wait;
@@ -2739,7 +2739,7 @@ int c4iw_create_srq(struct ib_srq *ib_srq, struct ib_srq_init_attr *attrs,
 		}
 		memset(&uresp, 0, sizeof(uresp));
 		uresp.flags = srq->flags;
-		uresp.qid_mask = rhp->rdev.qpmask;
+		uresp.qid_mask = rhp->rdev.rdma_res->qpmask;
 		uresp.srqid = srq->wq.qid;
 		uresp.srq_size = srq->wq.size;
 		uresp.srq_memsize = srq->wq.memsize;
@@ -2787,7 +2787,7 @@ err_free_queue:
 err_free_skb:
 	kfree_skb(srq->destroy_skb);
 err_free_srq_idx:
-	c4iw_free_srq_idx(&rhp->rdev, srq->idx);
+	cxgb4_uld_free_srq_idx(rhp->rdev.rdma_res, srq->idx);
 err_free_wr_wait:
 	c4iw_put_wr_wait(srq->wr_waitp);
 	return ret;
@@ -2807,7 +2807,7 @@ int c4iw_destroy_srq(struct ib_srq *ibsrq, struct ib_udata *udata)
 					     ibucontext);
 	free_srq_queue(srq, ucontext ? &ucontext->uctx : &rhp->rdev.uctx,
 		       srq->wr_waitp);
-	c4iw_free_srq_idx(&rhp->rdev, srq->idx);
+	cxgb4_uld_free_srq_idx(rhp->rdev.rdma_res, srq->idx);
 	c4iw_put_wr_wait(srq->wr_waitp);
 	return 0;
 }

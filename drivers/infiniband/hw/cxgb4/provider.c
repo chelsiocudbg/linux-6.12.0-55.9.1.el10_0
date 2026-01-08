@@ -70,7 +70,7 @@ static void c4iw_dealloc_ucontext(struct ib_ucontext *context)
 
 	list_for_each_entry_safe(mm, tmp, &ucontext->mmaps, entry)
 		kfree(mm);
-	c4iw_release_dev_ucontext(&rhp->rdev, &ucontext->uctx);
+	cxgb4_uld_release_dev_ucontext(rhp->rdev.rdma_res, &ucontext->uctx);
 }
 
 static int c4iw_alloc_ucontext(struct ib_ucontext *ucontext,
@@ -84,7 +84,7 @@ static int c4iw_alloc_ucontext(struct ib_ucontext *ucontext,
 	struct c4iw_mm_entry *mm = NULL;
 
 	pr_debug("ibdev %p\n", ibdev);
-	c4iw_init_dev_ucontext(&rhp->rdev, &context->uctx);
+	cxgb4_uld_init_dev_ucontext(&context->uctx);
 	INIT_LIST_HEAD(&context->mmaps);
 	spin_lock_init(&context->mmap_lock);
 
@@ -198,10 +198,8 @@ static int c4iw_deallocate_pd(struct ib_pd *pd, struct ib_udata *udata)
 	php = to_c4iw_pd(pd);
 	rhp = php->rhp;
 	pr_debug("ibpd %p pdid 0x%x\n", pd, php->pdid);
-	c4iw_put_resource(&rhp->rdev.resource.pdid_table, php->pdid);
-	mutex_lock(&rhp->rdev.stats.lock);
-	rhp->rdev.stats.pd.cur--;
-	mutex_unlock(&rhp->rdev.stats.lock);
+	cxgb4_uld_put_pdid(rhp->rdev.rdma_res, php->pdid);
+
 	return 0;
 }
 
@@ -214,7 +212,7 @@ static int c4iw_allocate_pd(struct ib_pd *pd, struct ib_udata *udata)
 
 	pr_debug("ibdev %p\n", ibdev);
 	rhp = (struct c4iw_dev *) ibdev;
-	pdid =  c4iw_get_resource(&rhp->rdev.resource.pdid_table);
+	pdid = cxgb4_uld_get_pdid(rhp->rdev.rdma_res);
 	if (!pdid)
 		return -EINVAL;
 
@@ -228,11 +226,6 @@ static int c4iw_allocate_pd(struct ib_pd *pd, struct ib_udata *udata)
 			return -EFAULT;
 		}
 	}
-	mutex_lock(&rhp->rdev.stats.lock);
-	rhp->rdev.stats.pd.cur++;
-	if (rhp->rdev.stats.pd.cur > rhp->rdev.stats.pd.max)
-		rhp->rdev.stats.pd.max = rhp->rdev.stats.pd.cur;
-	mutex_unlock(&rhp->rdev.stats.lock);
 	pr_debug("pdid 0x%0x ptr 0x%p\n", pdid, php);
 	return 0;
 }
