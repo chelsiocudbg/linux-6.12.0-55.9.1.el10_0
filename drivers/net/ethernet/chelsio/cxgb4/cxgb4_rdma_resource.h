@@ -37,7 +37,7 @@
 #define CXGB4_ID_TABLE_F_RANDOM 1      /* Pseudo-randomize the id's returned */
 #define CXGB4_ID_TABLE_F_EMPTY  2      /* Table is initially empty */
 #define T4_MAX_NUM_PD 65536
-struct cxgb4_lld_info;
+
 struct cxgb4_id_table {
        unsigned long *table;
        spinlock_t lock;
