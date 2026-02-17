@@ -952,7 +952,7 @@ static int pm_stats_show(struct seq_file *seq, void *v)
 			   rx_cnt[i], rx_cyc[i]);
 	}
 
-	else if (CHELSIO_CHIP_VERSION(adap->params.chip) >= CHELSIO_T7) {
+	if (CHELSIO_CHIP_VERSION(adap->params.chip) >= CHELSIO_T7) {
 		u32 stats[T7_PM_RX_CACHE_NSTATS];
 
 		t4_pmrx_cache_get_stats(adap, stats);
@@ -3213,59 +3213,6 @@ static int cxgb4_sge_qinfo_uld_txq_num(struct adapter *adap,
 	return ntx;
 }
 
-static int cxgb4_sge_qinfo_uld_toe(struct seq_file *seq, int *row)
-{
-	struct t4_linux_debugfs_data *d = seq->private;
-	int r, nentries, nsharetx, nsendtx;
-	struct adapter *adap = d->adap;
-	struct sge *s = &adap->sge;
-
-	if (!cxgb4_uld_supported(adap, CXGB4_ULD_TYPE_TOE))
-		return -EOPNOTSUPP;
-
-	nsharetx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SHARED,
-					       CXGB4_ULD_TYPE_TOE);
-	nsendtx = cxgb4_sge_qinfo_uld_txq_num(adap, CXGB4_ULD_TXQ_TYPE_SENDPATH,
-					      CXGB4_ULD_TYPE_TOE);
-	nentries = DIV_ROUND_UP(s->ofldqsets, SGE_QINFO_NUM_PER_ROW) +
-		   DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW) +
-		   DIV_ROUND_UP(nsendtx, SGE_QINFO_NUM_PER_ROW);
-#ifdef CONFIG_T4_MA_FAILOVER
-	nentries += DIV_ROUND_UP(s->nfailoverq, SGE_QINFO_NUM_PER_ROW);
-#endif /* CONFIG_T4_MA_FAILOVER */
-
-	if (!row)
-		return nentries;
-	r = *row;
-	if (r >= nentries) {
-		*row -= nentries;
-		return -EINVAL;
-	}
-
-	r -= DIV_ROUND_UP(s->ofldqsets, SGE_QINFO_NUM_PER_ROW);
-#ifdef CONFIG_T4_MA_FAILOVER
-	if (r < DIV_ROUND_UP(s->nfailoverq, SGE_QINFO_NUM_PER_ROW)) {
-		rx = &s->failoverq;
-		cxgb4_sge_qinfo_uld_rx(seq, r, s->nfailoverq, rx,
-				       "MA-FAILOVER");
-		return 0;
-	}
-
-	r -= DIV_ROUND_UP(s->nfailoverq, SGE_QINFO_NUM_PER_ROW);
-#endif /* CONFIG_T4_MA_FAILOVER */
-
-	if (r < DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW)) {
-		cxgb4_sge_qinfo_uld_tx(seq, r, CXGB4_ULD_TXQ_TYPE_SHARED,
-				       CXGB4_ULD_TYPE_TOE, "TOE-TX");
-		return 0;
-	}
-
-	r -= DIV_ROUND_UP(nsharetx, SGE_QINFO_NUM_PER_ROW);
-	cxgb4_sge_qinfo_uld_tx(seq, r, CXGB4_ULD_TXQ_TYPE_SENDPATH,
-			       CXGB4_ULD_TYPE_TOE, "TOE-SENDTX");
-	return 0;
-}
-
 static int cxgb4_sge_qinfo_uld_rdma(struct seq_file *seq, int *row)
 {
 	struct t4_linux_debugfs_data *d = seq->private;
@@ -3716,7 +3663,6 @@ static int sge_qinfo_show(struct seq_file *seq, void *v)
 	SGE_QINFO_CALL(eth_trace);
 	SGE_QINFO_CALL(eth_mirror);
 	SGE_QINFO_CALL(eth_vxlan);
-	SGE_QINFO_CALL(uld_toe);
 	SGE_QINFO_CALL(uld_rdma);
 	SGE_QINFO_CALL(uld_iscsi);
 	SGE_QINFO_CALL(uld_iscsit);
@@ -3758,7 +3704,6 @@ static int sge_queue_entries(struct seq_file *seq)
 	SGE_QINFO_NUM_CALL(eth_trace);
 	SGE_QINFO_NUM_CALL(eth_mirror);
 	SGE_QINFO_NUM_CALL(eth_vxlan);
-	SGE_QINFO_NUM_CALL(uld_toe);
 	SGE_QINFO_NUM_CALL(uld_rdma);
 	SGE_QINFO_NUM_CALL(uld_iscsi);
 	SGE_QINFO_NUM_CALL(uld_iscsit);
