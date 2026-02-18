@@ -5350,7 +5350,6 @@ static int cxgb4_enable_irqs(struct adapter *adap)
 {
 	u32 eth_need, uld_need = 0, ethofld_need = 0, mirror_need = 0;
 	u32 ethqsets = 0, ofldqsets = 0, eoqsets = 0, mirrorqsets = 0;
-	u8 num_uld = 0;
 	u8 nchan = adap->params.nports;
 	u32 i, want, need, num_vec, flags = 0;
 	struct sge *s = &adap->sge;
@@ -5369,9 +5368,8 @@ static int cxgb4_enable_irqs(struct adapter *adap)
 #endif
 	eth_need = need;
 	if (is_uld(adap)) {
-		num_uld = adap->num_ofld_uld + adap->num_uld;
-		want += num_uld * s->ofldqsets;
-		uld_need = num_uld * nchan;
+		want += s->ofldqsets;
+		uld_need = adap->params.num_up_cores * nchan;
 		need += uld_need;
 	}
 
